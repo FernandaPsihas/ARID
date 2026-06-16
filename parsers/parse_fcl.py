@@ -14,5 +14,5 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from parsers.brace_chunker import brace_chunk
 
 
-def parse_fcl(filepath: str, repo: str = "dunereco") -> list[dict]:
-    return brace_chunk(filepath, repo, "fcl")
+def parse_fcl(filepath: str) -> list[dict]:
+    return brace_chunk(filepath, "fcl")

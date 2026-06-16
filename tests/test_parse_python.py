@@ -24,7 +24,7 @@ def test_parse_python():
         f.write(SOURCE)
         path = f.name
     try:
-        chunks = parse_python(path, repo="dunereco")
+        chunks = parse_python(path)
     finally:
         os.unlink(path)
 
@@ -37,7 +37,7 @@ def test_parse_python():
     assert greet["language"] == "python"
     assert greet["start_line"] == 1
     assert greet["end_line"] == 2
-    assert greet["id"] == "dunereco_greet_1"
+    assert greet["id"] == f"{path}_greet_1"  # id is now file-based
 
     widget = by_symbol["Widget"]
     assert widget["start_line"] == 5

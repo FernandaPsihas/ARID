@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# extraction inputs/outputs — not part of ARID history
+dunereco/
+chunks.jsonl

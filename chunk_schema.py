@@ -7,7 +7,7 @@ VALID_LANGUAGES = {"cpp", "fcl", "python", "jsonnet"}  # fcl, not fhicl, idk man
 
 @dataclass
 class Chunk:
-    id: str            # f"{repo}_{symbol}_{start_line}"
+    id: str            # f"{file}_{symbol}_{start_line}"
     file: str          # relative path within repo
     start_line: int
     end_line: int
@@ -16,9 +16,11 @@ class Chunk:
     text: str
 
 
-def make_chunk_id(repo: str, symbol: str, start_line: int) -> str:
-    return f"{repo}_{symbol}_{start_line}"
-# ex. calibrate_hits from the dunereco repo would be dunereco_calibrate_hits_42
+def make_chunk_id(file: str, symbol: str, start_line: int) -> str:
+    return f"{file}_{symbol}_{start_line}"
+# file is the repo-relative path, which keeps ids unique across the repo
+# (repo alone was constant -> same symbol+line in two files collided).
+# ex. CalibrateHits at line 42 of Calib/foo.cc -> Calib/foo.cc_CalibrateHits_42
 
 
 def validate_chunk(chunk: dict) -> list[str]:

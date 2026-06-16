@@ -28,7 +28,7 @@ def _symbol(line: str, start_line: int) -> str:
     return f"block_{start_line}"
 
 
-def brace_chunk(filepath: str, repo: str, language: str) -> list[dict]:
+def brace_chunk(filepath: str, language: str) -> list[dict]:
     try:
         with open(filepath, "r", encoding="utf-8") as f:
             lines = f.readlines()
@@ -50,7 +50,7 @@ def brace_chunk(filepath: str, repo: str, language: str) -> list[dict]:
         if start_line is not None and depth <= 0:
             symbol = _symbol(lines[start_line - 1], start_line)
             chunk = {
-                "id": make_chunk_id(repo, symbol, start_line),
+                "id": make_chunk_id(filepath, symbol, start_line),
                 "file": filepath,
                 "start_line": start_line,
                 "end_line": i,

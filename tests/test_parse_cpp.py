@@ -29,7 +29,7 @@ def test_parse_cpp():
         f.write(SOURCE)
         path = f.name
     try:
-        chunks = parse_cpp(path, repo="dunereco")
+        chunks = parse_cpp(path)
     finally:
         os.unlink(path)
 

@@ -32,7 +32,7 @@ def test_parse_fcl():
         f.write(SOURCE)
         path = f.name
     try:
-        chunks = parse_fcl(path, repo="dunereco")
+        chunks = parse_fcl(path)
     finally:
         os.unlink(path)
 

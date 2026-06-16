@@ -32,7 +32,7 @@ def _func_symbol(node):
     return None
 
 
-def parse_cpp(filepath: str, repo: str = "dunereco") -> list[dict]:
+def parse_cpp(filepath: str) -> list[dict]:
     try:
         with open(filepath, "rb") as f:
             source = f.read()
@@ -55,7 +55,7 @@ def parse_cpp(filepath: str, repo: str = "dunereco") -> list[dict]:
         if symbol:
             start_line = node.start_point[0] + 1
             chunk = {
-                "id": make_chunk_id(repo, symbol, start_line),
+                "id": make_chunk_id(filepath, symbol, start_line),
                 "file": filepath,
                 "start_line": start_line,
                 "end_line": node.end_point[0] + 1,

@@ -25,7 +25,7 @@ def test_parse_jsonnet():
         f.write(SOURCE)
         path = f.name
     try:
-        chunks = parse_jsonnet(path, repo="dunereco")
+        chunks = parse_jsonnet(path)
     finally:
         os.unlink(path)
 

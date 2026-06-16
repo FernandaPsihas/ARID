@@ -13,7 +13,7 @@ PY_LANGUAGE = Language(tspython.language())
 _parser = Parser(PY_LANGUAGE)
 
 
-def parse_python(filepath: str, repo: str = "dunereco") -> list[dict]:
+def parse_python(filepath: str) -> list[dict]:
     try:
         with open(filepath, "rb") as f:
             source = f.read()
@@ -34,7 +34,7 @@ def parse_python(filepath: str, repo: str = "dunereco") -> list[dict]:
                 symbol = name_node.text.decode("utf-8")
                 start_line = node.start_point[0] + 1
                 chunk = {
-                    "id": make_chunk_id(repo, symbol, start_line),
+                    "id": make_chunk_id(filepath, symbol, start_line),
                     "file": filepath,
                     "start_line": start_line,
                     "end_line": node.end_point[0] + 1,

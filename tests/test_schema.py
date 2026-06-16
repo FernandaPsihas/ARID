@@ -20,7 +20,7 @@ def good():
     }
 
 
-assert make_chunk_id("dunereco", "CalibrateHits", 42) == "dunereco_CalibrateHits_42"
+assert make_chunk_id("src/RecoBase/Hit.cc", "CalibrateHits", 42) == "src/RecoBase/Hit.cc_CalibrateHits_42"
 assert validate_chunk(good()) == []
 
 bad = good(); bad["language"] = "fhicl"
