@@ -17,6 +17,10 @@ class Widget {
 public:
     void spin();
 };
+
+void Widget::spin() {
+    return;
+}
 '''
 
 
@@ -32,6 +36,7 @@ def test_parse_cpp():
     by_symbol = {c["symbol"]: c for c in chunks}
     assert "add" in by_symbol, by_symbol
     assert "Widget" in by_symbol, by_symbol
+    assert "Widget::spin" in by_symbol, by_symbol  # qualified name from nested declarator
     assert all(c["language"] == "cpp" for c in chunks)
     assert by_symbol["add"]["start_line"] == 1
 

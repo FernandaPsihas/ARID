@@ -7,7 +7,7 @@ from tree_sitter import Language, Parser
 import tree_sitter_python as tspython
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from chunk import make_chunk_id, validate_chunk
+from chunk_schema import make_chunk_id, validate_chunk
 
 PY_LANGUAGE = Language(tspython.language())
 _parser = Parser(PY_LANGUAGE)

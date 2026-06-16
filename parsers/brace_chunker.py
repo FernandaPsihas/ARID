@@ -14,7 +14,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from chunk import make_chunk_id, validate_chunk
+from chunk_schema import make_chunk_id, validate_chunk
 
 _IDENT = re.compile(r"\b[a-zA-Z_]\w*\b")
 # leading keywords that aren't the block's real name (jsonnet binds, mostly)

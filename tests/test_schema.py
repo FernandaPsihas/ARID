@@ -3,7 +3,9 @@
 import sys
 from dataclasses import fields
 
-from chunk import Chunk, VALID_LANGUAGES, make_chunk_id, validate_chunk
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from chunk_schema import Chunk, VALID_LANGUAGES, make_chunk_id, validate_chunk
 
 
 def good():
