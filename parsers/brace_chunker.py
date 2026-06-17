@@ -21,11 +21,29 @@ _IDENT = re.compile(r"\b[a-zA-Z_]\w*\b")
 _SKIP = {"local", "function", "assert", "if", "then", "else", "for", "in"}
 
 
-def _symbol(line: str, start_line: int) -> str:
+def _first_ident(line: str) -> str | None:
     for m in _IDENT.finditer(line):
         if m.group(0) not in _SKIP:
             return m.group(0)
-    return f"block_{start_line}"
+    return None
+
+
+def _symbol(lines: list[str], open_idx: int) -> str:
+    """Name for the block whose `{` is on lines[open_idx] (0-indexed)."""
+    sym = _first_ident(lines[open_idx])
+    if sym:
+        return sym
+    # FHiCL style puts the name on the line above a lone `{` (`key:\n{`).
+    # ponytail: only the nearest preceding non-blank line; a comment/END_PROLOG
+    # there yields a junk name, no worse than block_N. Real grammar fixes it.
+    j = open_idx - 1
+    while j >= 0 and not lines[j].strip():
+        j -= 1
+    if j >= 0:
+        sym = _first_ident(lines[j])
+        if sym:
+            return sym
+    return f"block_{open_idx + 1}"
 
 
 def brace_chunk(filepath: str, language: str) -> list[dict]:
@@ -48,7 +66,7 @@ def brace_chunk(filepath: str, language: str) -> list[dict]:
             buf.append(line)
         depth += line.count("{") - line.count("}")
         if start_line is not None and depth <= 0:
-            symbol = _symbol(lines[start_line - 1], start_line)
+            symbol = _symbol(lines, start_line - 1)
             chunk = {
                 "id": make_chunk_id(filepath, symbol, start_line),
                 "file": filepath,

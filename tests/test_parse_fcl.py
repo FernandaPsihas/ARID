@@ -12,7 +12,8 @@ SOURCE = '''\
 #include "services.fcl"
 
 BEGIN_PROLOG
-standard_calibration: {
+standard_calibration:
+{
     module_type: Calibration
     threshold: 0.5
 }
@@ -37,6 +38,8 @@ def test_parse_fcl():
         os.unlink(path)
 
     by_symbol = {c["symbol"]: c for c in chunks}
+    # name is on the line ABOVE the lone `{` (dunereco's FHiCL style) — must still
+    # resolve to the real name, not block_N
     assert "standard_calibration" in by_symbol, by_symbol
     assert "physics" in by_symbol, by_symbol
     assert all(c["language"] == "fcl" for c in chunks)
