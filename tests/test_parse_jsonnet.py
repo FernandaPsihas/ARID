@@ -1,4 +1,4 @@
-"""Test parse_jsonnet (KAN-8) — fallback brace-depth chunker."""
+"""Test parse_jsonnet (KAN-8) — real tree-sitter parse."""
 
 import os
 import sys
@@ -9,14 +9,17 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from parsers.parse_jsonnet import parse_jsonnet
 
 SOURCE = '''\
-local greeting = {
-    hello: "world",
-};
+local wc = import "wirecell.jsonnet";
 
-local config = {
-    name: "dunereco",
-    count: 3,
-};
+{
+    lar: {
+        DL: 7.2,
+        DT: 12.0,
+    },
+    daq: {
+        nticks: 100,
+    },
+}
 '''
 
 
@@ -29,12 +32,17 @@ def test_parse_jsonnet():
     finally:
         os.unlink(path)
 
-    assert len(chunks) >= 1, chunks
     assert all(c["language"] == "jsonnet" for c in chunks)
-    # fallback: blocks should cover their lines contiguously, first block starts at line 1
-    assert chunks[0]["start_line"] == 1
-    symbols = {c["symbol"] for c in chunks}
-    assert "local" in symbols or "greeting" in symbols, symbols
+    by_symbol = {c["symbol"]: c for c in chunks}
+    # top-level local bind + each root-object field, real names (not block_N)
+    assert "wc" in by_symbol, by_symbol
+    assert "lar" in by_symbol, by_symbol
+    assert "daq" in by_symbol, by_symbol
+
+    # nested fields stay INSIDE their parent chunk, not split out
+    lar = by_symbol["lar"]
+    assert "DL" in lar["text"] and "DT" in lar["text"]
+    assert "DL" not in by_symbol, "nested field leaked as its own chunk"
 
     print("KAN-8 ✓")
 

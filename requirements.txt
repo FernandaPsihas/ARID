@@ -1,7 +1,13 @@
-# parsers (KAN-5..8) — jsonnet/fcl use the stdlib brace chunker, no grammar dep
+# parsers — python/cpp/jsonnet use tree-sitter; fcl uses the stdlib brace chunker
 tree-sitter==0.25.2
 tree-sitter-python==0.25.0
 tree-sitter-cpp==0.23.4
+# tree-sitter-jsonnet: the published 0.0.1 wheel does NOT build (its setup.py
+# omits src/scanner.c). Install from a clone with that line added, e.g.:
+#   git clone https://github.com/sourcegraph/tree-sitter-jsonnet
+#   # add "src/scanner.c" to the sources list in setup.py, then:
+#   pip install ./tree-sitter-jsonnet
+# TODO: upstream the one-line fix, then pin it here normally.
 
 # embed/store (merged from embed_store.py) — not installed locally yet, unpinned
 qdrant-client
