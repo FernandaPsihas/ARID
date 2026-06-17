@@ -106,11 +106,11 @@ def search_dense(query: str, top_k: int = 20) -> list[dict]:
 #cli
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python embed_store.py <chunks.json>")
+        print("Usage: python embed_store.py <chunks.jsonl>")
         sys.exit(1)
- 
-    with open(sys.argv[1]) as f:
-        chunks = json.load(f)
+
+    with open(sys.argv[1], encoding="utf-8") as f:
+        chunks = [json.loads(line) for line in f if line.strip()]  # JSONL, matches extract.py output
  
     print(f"Loaded {len(chunks)} chunks from {sys.argv[1]}")
     setup()
