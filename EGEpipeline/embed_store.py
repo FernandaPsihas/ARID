@@ -20,9 +20,17 @@ BATCH_SIZE  = 32
 # don't ask me what this is because i dont know
 _client = QdrantClient(url=QDRANT_URL)
 
+# ponytail: embeddings are ONE vector for the whole input — passage-sized chunks
+# give sharp vectors, whole-file blobs give mushy ones. 99% of chunks are <600
+# chars. Truncate the embed INPUT (full text still goes to the payload + BM25, so
+# nothing's lost for retrieval). Char->token ratio varies: code ~3:1, but jsonnet
+# numeric data tables ~1:1, so 6000 chars worst-case ~6000 tokens — num_ctx=8192
+# holds that with margin.
+MAX_EMBED_CHARS = 6000
+
 #couple helpers
 def _embed(text: str) -> list[float]:
-    return ollama.embeddings(model=EMBED_MODEL, prompt=text)["embedding"]
+    return ollama.embeddings(model=EMBED_MODEL, prompt=text[:MAX_EMBED_CHARS], options={"num_ctx": 8192})["embedding"]
 
 def _dim() -> int:
     return len(_embed("probe"))
@@ -57,9 +65,16 @@ def index_chunks(chunks: list[dict]):
  
     total = len(chunks)
     batch = []
- 
+    failed = []
+
     for i, chunk in enumerate(chunks):
-        vector = _embed(chunk["text"])
+        try:
+            vector = _embed(chunk["text"])
+        except Exception as e:
+            print(f"  ERROR chunk[{i}] {chunk['id']} ({len(chunk['text'])} chars): {e}")
+            failed.append({"index": i, "id": chunk["id"], "file": chunk["file"],
+                           "chars": len(chunk["text"]), "error": str(e)})
+            continue
         batch.append(
             PointStruct(
                 id=_chunk_id_to_uuid(chunk["id"]),
@@ -75,13 +90,18 @@ def index_chunks(chunks: list[dict]):
                 },
             )
         )
- 
+
         if len(batch) >= BATCH_SIZE or i == total - 1:
             _client.upsert(collection_name=COLLECTION, points=batch)
             print(f"  {i + 1}/{total} chunks indexed")
             batch = []
- 
-    print(f"\nDone. {total} chunks stored in Qdrant.")
+
+    if failed:
+        import json as _json
+        with open("embed_errors.json", "w") as f:
+            _json.dump(failed, f, indent=2)
+        print(f"\n{len(failed)} chunks failed — see embed_errors.json")
+    print(f"\nDone. {total - len(failed)}/{total} chunks stored in Qdrant.")
 
 def search_dense(query: str, top_k: int = 20) -> list[dict]:
     hits = _client.query_points(
