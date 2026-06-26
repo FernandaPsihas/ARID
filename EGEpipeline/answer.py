@@ -10,7 +10,6 @@ import sys
 import ollama
 
 sys.path.append(os.path.dirname(__file__))
-sys.stdout.reconfigure(encoding="utf-8")  # model emits smart quotes/em-dashes; cp1252 console mangles them
 
 GEN_MODEL = "qwen2.5-coder:7b"
 TOP_K     = 6      # chunks fed as context
@@ -35,6 +34,7 @@ def _format_context(chunks: list[dict]) -> str:
 
 def answer(query: str, top_k: int = TOP_K) -> None:
     from search import search_codebase  # lazy: pulls qdrant/ollama/bm25 only when run
+    sys.stdout.reconfigure(encoding="utf-8")  # model emits smart quotes/em-dashes; cp1252 console mangles them
 
     chunks = search_codebase(query, top_k=top_k)
     if not chunks:

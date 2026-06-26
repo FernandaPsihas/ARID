@@ -14,7 +14,7 @@ from chunk_schema import validate_chunk
 
 EMBED_MODEL = "qwen3-embedding:0.6b"
 COLLECTION  = "dunereco"
-QDRANT_URL  = "http://localhost:6333"
+QDRANT_URL  = os.environ.get("QDRANT_URL", "http://localhost:6333")  # service name in docker, localhost otherwise
 BATCH_SIZE  = 32
 
 # don't ask me what this is because i dont know

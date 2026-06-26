@@ -33,7 +33,12 @@ def search_codebase(query: str, top_k: int = 10, pool: int = 10) -> list[dict]:
     """Hybrid search -> list of chunk-schema dicts (+ rrf score), best first."""
     from embed_store import search_dense  # lazy: pulls in qdrant/ollama only when used
 
-    scores, meta = _rrf(search_dense(query, top_k=pool), _get_bm25().search(query, top_k=pool))
+    try:
+        dense = search_dense(query, top_k=pool)
+    except Exception as e:  # ponytail: qdrant/ollama down (dead tunnel) -> BM25-only, not a crash
+        print(f"warning: dense search unavailable ({e}); falling back to BM25-only", file=sys.stderr)
+        dense = []
+    scores, meta = _rrf(dense, _get_bm25().search(query, top_k=pool))
     ranked = sorted(scores, key=scores.get, reverse=True)[:top_k]
     out = []
     for cid in ranked:

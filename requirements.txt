@@ -12,3 +12,6 @@ tree-sitter-cpp==0.23.4
 # embed/store (merged from embed_store.py) — not installed locally yet, unpinned
 qdrant-client
 ollama
+
+# arid_mcp.py — MCP server exposing retrieval as tools to a remote Claude (over SSH stdio)
+mcp
