@@ -8,11 +8,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 
 WORKDIR /app
 
-# deps first so they cache across code edits. tree-sitter-jsonnet builds from the
-# vendored clone (its setup.py has the src/scanner.c fix the published wheel omits).
+# deps first so they cache across code edits. requirements.txt installs the vendored
+# tree-sitter-jsonnet from its local path (patched setup.py adds the src/scanner.c the
+# published wheel omits), so this one command builds everything — same as on Windows.
 COPY requirements.txt ./
 COPY tree-sitter-jsonnet ./tree-sitter-jsonnet
-RUN pip install --no-cache-dir -r requirements.txt && pip install --no-cache-dir ./tree-sitter-jsonnet
+RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
