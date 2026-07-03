@@ -1,4 +1,4 @@
-# ARID — AI-Assisted Repository Interrogation for DUNE
+# ARID — Augmented Research Integration for Dune
 
 ARID is a RAG (retrieval-augmented generation) pipeline that lets you ask natural-language questions about the [dunereco](https://github.com/DUNE/dunereco) LArSoft codebase and get grounded, citation-backed answers.
 
