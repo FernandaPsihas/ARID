@@ -20,7 +20,6 @@ import subprocess
 import sys
 
 sys.path.append(os.path.dirname(__file__))
-sys.stdout.reconfigure(encoding="utf-8")  # model emits smart quotes/em-dashes; cp1252 console mangles them
 
 CLAUDE_EXE = os.environ.get(
     "ARID_CLAUDE_EXE", r"C:\Users\Cephandrius\.local\bin\claude.exe"

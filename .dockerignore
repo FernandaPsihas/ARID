@@ -1,0 +1,10 @@
+# keep the build context small — dunereco (the corpus) and chunks.jsonl are mounted at runtime, not baked in
+dunereco/
+chunks.jsonl
+.git/
+.idea/
+.claude/
+**/__pycache__/
+**/*.pyc
+**/build/
+tree-sitter-jsonnet/.git/

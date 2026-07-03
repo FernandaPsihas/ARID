@@ -2,13 +2,15 @@
 tree-sitter==0.25.2
 tree-sitter-python==0.25.0
 tree-sitter-cpp==0.23.4
-# tree-sitter-jsonnet: the published 0.0.1 wheel does NOT build (its setup.py
-# omits src/scanner.c). Install from a clone with that line added, e.g.:
-#   git clone https://github.com/sourcegraph/tree-sitter-jsonnet
-#   # add "src/scanner.c" to the sources list in setup.py, then:
-#   pip install ./tree-sitter-jsonnet
-# TODO: upstream the one-line fix, then pin it here normally.
+# tree-sitter-jsonnet: vendored in-repo with a patched setup.py (adds src/scanner.c,
+# which the published 0.0.1 wheel omits). Local path -> pip compiles it from source on
+# install, so `pip install -r requirements.txt` Just Works on Windows and Linux. Needs
+# a C compiler (build-essential on Linux / MSVC Build Tools on Windows) like any grammar.
+./tree-sitter-jsonnet
 
 # embed/store (merged from embed_store.py) — not installed locally yet, unpinned
 qdrant-client
 ollama
+
+# arid_mcp.py — MCP server exposing retrieval as tools to a remote Claude (over SSH stdio)
+mcp
