@@ -1,3 +1,4 @@
+import concurrent.futures
 import json
 import sys
 import os
@@ -28,9 +29,23 @@ _client = QdrantClient(url=QDRANT_URL)
 # holds that with margin.
 MAX_EMBED_CHARS = 6000
 
+# chunks are embedded BATCH_SIZE at a time in one request; WORKERS such batched
+# requests run concurrently so the GPU has back-to-back work queued instead of
+# idling between round trips. Match OLLAMA_NUM_PARALLEL on the server
+# (docker-compose.yml) or these just queue up there instead of running concurrently.
+WORKERS = int(os.environ.get("EMBED_WORKERS", 8))
+
 #couple helpers
+def _embed_batch(texts: list[str]) -> list[list[float]]:
+    # /api/embed (ollama.embed) takes a list and runs it as one batched forward
+    # pass -- much less per-item overhead than N calls to the legacy single-prompt
+    # /api/embeddings (ollama.embeddings).
+    resp = ollama.embed(model=EMBED_MODEL, input=[t[:MAX_EMBED_CHARS] for t in texts],
+                         options={"num_ctx": 8192})
+    return resp.embeddings
+
 def _embed(text: str) -> list[float]:
-    return ollama.embeddings(model=EMBED_MODEL, prompt=text[:MAX_EMBED_CHARS], options={"num_ctx": 8192})["embedding"]
+    return _embed_batch([text])[0]
 
 def _dim() -> int:
     return len(_embed("probe"))
@@ -64,37 +79,61 @@ def index_chunks(chunks: list[dict]):
         sys.exit(1)
  
     total = len(chunks)
-    batch = []
     failed = []
+    done = 0
 
-    for i, chunk in enumerate(chunks):
+    def _embed_group(idxs: list[int]) -> list:
+        # one batched request for the whole group; if the batch call itself
+        # fails, fall back to per-chunk requests so one bad chunk (e.g. a
+        # pathological encoding) doesn't sink its whole batch.
         try:
-            vector = _embed(chunk["text"])
-        except Exception as e:
-            print(f"  ERROR chunk[{i}] {chunk['id']} ({len(chunk['text'])} chars): {e}")
-            failed.append({"index": i, "id": chunk["id"], "file": chunk["file"],
-                           "chars": len(chunk["text"]), "error": str(e)})
-            continue
-        batch.append(
-            PointStruct(
-                id=_chunk_id_to_uuid(chunk["id"]),
-                vector=vector,
-                payload={
-                    "chunk_id":   chunk["id"],
-                    "file":       chunk["file"],
-                    "start_line": chunk["start_line"],
-                    "end_line":   chunk["end_line"],
-                    "symbol":     chunk["symbol"],
-                    "language":   chunk["language"],
-                    "text":       chunk["text"],
-                },
-            )
-        )
+            return _embed_batch([chunks[i]["text"] for i in idxs])
+        except Exception:
+            results = []
+            for i in idxs:
+                try:
+                    results.append(_embed(chunks[i]["text"]))
+                except Exception as e:
+                    results.append(e)
+            return results
 
-        if len(batch) >= BATCH_SIZE or i == total - 1:
-            _client.upsert(collection_name=COLLECTION, points=batch)
-            print(f"  {i + 1}/{total} chunks indexed")
-            batch = []
+    groups = [list(range(i, min(i + BATCH_SIZE, total))) for i in range(0, total, BATCH_SIZE)]
+
+    # each group is one batched embed call; WORKERS groups run concurrently so
+    # the GPU stays fed between requests instead of idling on network/JSON overhead.
+    with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
+        futures = {pool.submit(_embed_group, g): g for g in groups}
+        for future in concurrent.futures.as_completed(futures):
+            idxs = futures[future]
+            results = future.result()
+            points = []
+            for i, r in zip(idxs, results):
+                chunk = chunks[i]
+                done += 1
+                if isinstance(r, Exception):
+                    print(f"  ERROR chunk[{i}] {chunk['id']} ({len(chunk['text'])} chars): {r}")
+                    failed.append({"index": i, "id": chunk["id"], "file": chunk["file"],
+                                   "chars": len(chunk["text"]), "error": str(r)})
+                    continue
+                points.append(
+                    PointStruct(
+                        id=_chunk_id_to_uuid(chunk["id"]),
+                        vector=r,
+                        payload={
+                            "chunk_id":   chunk["id"],
+                            "file":       chunk["file"],
+                            "start_line": chunk["start_line"],
+                            "end_line":   chunk["end_line"],
+                            "symbol":     chunk["symbol"],
+                            "language":   chunk["language"],
+                            "text":       chunk["text"],
+                        },
+                    )
+                )
+
+            if points:
+                _client.upsert(collection_name=COLLECTION, points=points)
+            print(f"  {done}/{total} chunks indexed")
 
     if failed:
         import json as _json

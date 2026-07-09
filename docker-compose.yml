@@ -8,11 +8,17 @@ services:
     image: ollama/ollama
     ports: ["11434:11434"]
     volumes: ["ollama_data:/root/.ollama"]
+    environment:
+      OLLAMA_NUM_PARALLEL: "8"   # match EMBED_WORKERS in embed_store.py, else requests just queue server-side
     healthcheck:
       test: ["CMD", "ollama", "list"]
       interval: 5s
       timeout: 3s
       retries: 30
+    # GPU passthrough is opt-in via docker-compose.gpu.yml (see README) -- a
+    # hard `deploy.reservations.devices: nvidia` here would make `docker compose
+    # up` fail outright on any machine without that exact setup. CPU works
+    # everywhere, just slower.
 
   app:
     build: .
@@ -26,8 +32,10 @@ services:
       OLLAMA_HOST: http://ollama:11434
     volumes:
       - ./:/app          # repo (incl. dunereco corpus + chunks.jsonl) lives on host
-    # pull the two models into ollama (idempotent — skips if present), then idle so you can exec the pipeline
-    command: ["bash", "-c", "python -c \"import ollama; [ollama.pull(m) for m in ('qwen3-embedding:0.6b','qwen2.5-coder:7b')]\" && tail -f /dev/null"]
+    # one-command install: pulls models, clones dunereco, extracts, embeds+indexes
+    # -- every step is idempotent, so `docker compose up` is also the safe way to
+    # resume/refresh. See docker/bootstrap.py. Then idles for `docker compose exec app ...`.
+    command: ["python", "docker/bootstrap.py"]
 
 volumes:
   qdrant_data:
