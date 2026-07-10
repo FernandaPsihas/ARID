@@ -4,3 +4,7 @@ __pycache__/
 # extraction inputs/outputs — not part of ARID history
 dunereco/
 chunks.jsonl
+
+# local-only, not shipped in the public repo
+CLAUDE.md
+CHANGELOG.md
