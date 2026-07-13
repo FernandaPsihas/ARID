@@ -92,6 +92,26 @@ docker compose exec app python EGEpipeline/answer.py "how is neutrino energy rec
 `answer.py`'s generation step runs against the containerized Ollama, so it works
 out of the box — no separate login or API key needed.
 
+**Interactive multi-turn CLI for researchers:**
+```
+docker compose exec -it app python EGEpipeline/chat.py
+```
+(or, from the host, against the containerized Qdrant/Ollama published on
+`localhost`: `source .venv/bin/activate && python EGEpipeline/chat.py`)
+
+Asks for a name, then takes as many questions as you want in one sitting —
+answers stream token-by-token and later questions can reference earlier
+answers (e.g. "what about the NC case?"). After each answer you rate it
+`good` / `needs improvement` / `skip`; "needs improvement" asks for one or
+more reasons (missing info, wrong citations, hallucinated, too vague,
+retrieval missed the code) plus optional free-text notes. The whole session
+is saved after every turn to `feedback/<researcher>/<timestamp>.json` — safe
+against a crash or Ctrl+C mid-session. Note: multi-turn memory only affects
+*generation* (the model sees prior Q&A text) — *retrieval* still searches
+using just the literal follow-up text, so a heavily pronoun-dependent
+follow-up ("how is it configured?") can retrieve weaker chunks than a
+self-contained one ("how is CalorimetryAlg configured?").
+
 Useful env vars for `docker compose up` (set in your shell or a `.env` file):
 | Var | Default | Purpose |
 |-----|---------|---------|
@@ -135,7 +155,10 @@ ARID/
 │   ├── embed_store.py      Embedding + Qdrant indexing + dense search
 │   ├── search_bm25.py      BM25 keyword search
 │   ├── search.py           Hybrid RRF fusion (dense + BM25)
-│   └── answer.py           RAG answer step (retrieve → generate → cite)
+│   ├── answer.py           RAG answer step (retrieve → generate → cite)
+│   ├── chat.py             Interactive multi-turn CLI with researcher rating + logging
+│   └── arid_mcp.py         MCP server exposing search_arid/ask_arid over SSH stdio
+├── feedback/                gitignored: chat.py session logs, one JSON per researcher/session
 ├── eval/
 │   └── gold_queries.json   Gold query set for retrieval eval (KAN-24)
 ├── docker/

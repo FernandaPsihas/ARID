@@ -64,24 +64,31 @@ def _retrieve(query: str, top_k: int) -> list[dict]:
         return _BM25.search(query, top_k=top_k)
 
 
-def _generate(query: str, chunks: list[dict], stream: bool = False) -> str:
+def _generate(query: str, chunks: list[dict], stream: bool = False,
+               history: list[dict] | None = None, num_ctx: int | None = None) -> str:
     """Ground the local model on the retrieved snippets via Ollama.
 
     stream=True prints tokens to stdout as they arrive (for interactive CLI use);
     either way the full response text is returned. arid_mcp.py calls this with the
     default stream=False since an MCP tool call returns one string, not a live feed.
+
+    history, if given, is a list of prior {"role": "user"/"assistant", "content": ...}
+    turns (plain question/answer text, no code chunks -- chat.py uses this for
+    multi-turn sessions so old turns don't re-inflate the prompt with stale snippets).
     """
     import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
     prompt = f"Question: {query}\n\nCode snippets:\n\n{_format_context(chunks)}"
-    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+    messages = [{"role": "system", "content": SYSTEM}, *(history or []),
+                {"role": "user", "content": prompt}]
+    ctx = num_ctx or NUM_CTX
 
     if not stream:
-        resp = ollama.chat(model=GEN_MODEL, messages=messages, options={"num_ctx": NUM_CTX})
+        resp = ollama.chat(model=GEN_MODEL, messages=messages, options={"num_ctx": ctx})
         return (resp["message"]["content"] or "(no reply)").strip()
 
     parts = []
     for chunk in ollama.chat(model=GEN_MODEL, messages=messages,
-                              options={"num_ctx": NUM_CTX}, stream=True):
+                              options={"num_ctx": ctx}, stream=True):
         token = chunk["message"]["content"]
         print(token, end="", flush=True)
         parts.append(token)

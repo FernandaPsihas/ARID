@@ -5,6 +5,9 @@ __pycache__/
 dunereco/
 chunks.jsonl
 
+# researcher chat sessions from EGEpipeline/chat.py — local usage data, not source
+feedback/
+
 # local-only, not shipped in the public repo
 CLAUDE.md
 CHANGELOG.md

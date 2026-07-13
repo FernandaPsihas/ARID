@@ -1,0 +1,200 @@
+"""Interactive multi-turn CLI for researchers to query dunereco and rate answers.
+
+Flow: ask for a name, then loop taking questions until the researcher quits
+(Ctrl+D, or typing quit/exit). Each answer streams live via answer.py's
+_generate(), keeping conversational memory across turns (prior Q&A text, not
+the raw code chunks -- those are re-retrieved fresh per question so old
+snippets don't pile up in the context window). After each answer the
+researcher rates it good / needs improvement (with reason codes, or their own
+words) and the whole session -- every question, answer, sources, and rating
+-- is saved to feedback/<researcher>/<timestamp>.json after every turn, so a
+crash or Ctrl+C never loses more than the in-flight turn.
+
+Usage:
+    python EGEpipeline/chat.py
+"""
+
+import json
+import os
+import sys
+import time
+from datetime import datetime
+
+sys.path.append(os.path.dirname(__file__))
+
+from answer import GEN_MODEL, TOP_K, _generate, _retrieve
+
+FEEDBACK_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "feedback")
+CHAT_NUM_CTX = 16384    # bumped over answer.py's 8192: multi-turn history adds a bit of
+                        # length, and there's VRAM headroom to spare (see CHANGELOG.md)
+MAX_HISTORY_TURNS = 8   # plain-text Q&A pairs kept in the model's context; the saved
+                        # transcript keeps every turn regardless of this cap
+
+REASONS = [
+    ("missing_incomplete_info", "Missing or incomplete information"),
+    ("wrong_citations", "Wrong or irrelevant citations"),
+    ("inaccurate_hallucinated", "Inaccurate or hallucinated"),
+    ("too_vague", "Too vague / not specific enough"),
+    ("retrieval_missed_code", "Retrieval missed the relevant code"),
+    ("other", "Other (describe below)"),
+]
+
+QUIT_WORDS = {"quit", "exit", "/quit", "/exit", "/q"}
+
+
+def slugify(name: str) -> str:
+    import re
+    s = re.sub(r"[^a-zA-Z0-9]+", "_", name.strip().lower()).strip("_")
+    return s or "researcher"
+
+
+def session_path(researcher_slug: str, started_at: datetime, base_dir: str = FEEDBACK_DIR) -> str:
+    d = os.path.join(base_dir, researcher_slug)
+    os.makedirs(d, exist_ok=True)
+    return os.path.join(d, started_at.strftime("%Y%m%d_%H%M%S") + ".json")
+
+
+def save_session(session: dict, path: str) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(session, f, indent=2)
+    os.replace(tmp, path)  # atomic -- a crash mid-write can't corrupt the saved file
+
+
+def ask_name() -> str:
+    while True:
+        name = input("Your name: ").strip()
+        if name:
+            return name
+        print("Please enter a name.")
+
+
+def prompt_rating() -> tuple[str, list[str], str]:
+    while True:
+        choice = input("\nRate this answer  [g]ood / [n]eeds improvement / [s]kip: ").strip().lower()
+        if choice in ("g", "good"):
+            return "good", [], ""
+        if choice in ("n", "needs improvement", "needs_improvement"):
+            break
+        if choice in ("s", "skip", ""):
+            return "skipped", [], ""
+        print("Please enter g, n, or s.")
+
+    print("What needs improvement? (comma-separated numbers)")
+    for i, (_, label) in enumerate(REASONS, 1):
+        print(f"  [{i}] {label}")
+    reasons: list[str] = []
+    while not reasons:
+        raw = input("> ").strip()
+        idxs = set()
+        for tok in raw.split(","):
+            tok = tok.strip()
+            if tok.isdigit() and 1 <= int(tok) <= len(REASONS):
+                idxs.add(int(tok))
+        if idxs:
+            reasons = [REASONS[i - 1][0] for i in sorted(idxs)]
+        else:
+            print(f"Enter one or more numbers 1-{len(REASONS)}, comma-separated.")
+
+    notes = input("Anything else to add? (optional, Enter to skip): ").strip()
+    if reasons == ["other"] and not notes:
+        notes = input("You picked 'Other' -- what would you suggest instead? ").strip()
+    return "needs_improvement", reasons, notes
+
+
+def main() -> None:
+    print("=== ARID Research Assistant ===")
+    print(f"Model: {GEN_MODEL}  |  type 'quit' or Ctrl+D to end the session\n")
+    researcher = ask_name()
+    started_at = datetime.now()
+    path = session_path(slugify(researcher), started_at)
+    session = {
+        "researcher": researcher,
+        "model": GEN_MODEL,
+        "started_at": started_at.isoformat(timespec="seconds"),
+        "ended_at": None,
+        "turns": [],
+    }
+    print(f"\nHi {researcher}! Ask anything about the dunereco codebase.")
+    print(f"Saving this session to {path}\n")
+
+    history: list[dict] = []  # plain user/assistant text, no chunks -- see module docstring
+    turn_num = 0
+    try:
+        while True:
+            try:
+                question = input(f"[{turn_num + 1}] > ").strip()
+            except EOFError:
+                print()
+                break
+            if not question:
+                continue
+            if question.lower() in QUIT_WORDS:
+                break
+
+            t0 = time.time()
+            chunks = _retrieve(question, top_k=TOP_K)
+            if not chunks:
+                print("No relevant chunks found in the dunereco codebase.\n")
+                continue
+
+            print()
+            body = _generate(question, chunks, stream=True,
+                              history=history[-2 * MAX_HISTORY_TURNS:], num_ctx=CHAT_NUM_CTX)
+            elapsed = time.time() - t0
+
+            sources = [{"file": c["file"], "start_line": c["start_line"],
+                        "end_line": c["end_line"], "symbol": c["symbol"]} for c in chunks]
+            src_text = "\n".join(
+                f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
+            print(f"\nSources:\n{src_text}")
+            print(f"({elapsed:.1f}s)")
+
+            rating, reasons, notes = prompt_rating()
+
+            turn_num += 1
+            session["turns"].append({
+                "turn": turn_num,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "question": question,
+                "answer": body,
+                "sources": sources,
+                "latency_seconds": round(elapsed, 1),
+                "rating": rating,
+                "reasons": reasons,
+                "notes": notes,
+            })
+            save_session(session, path)
+
+            history.append({"role": "user", "content": question})
+            history.append({"role": "assistant", "content": body})
+            print()
+    except KeyboardInterrupt:
+        print("\n\nInterrupted.")
+    finally:
+        session["ended_at"] = datetime.now().isoformat(timespec="seconds")
+        save_session(session, path)
+        print(f"\nSaved {turn_num} question(s) to {path}. Goodbye, {researcher}!")
+
+
+def _selfcheck():
+    import tempfile
+    assert slugify("Dr. Jane O'Brien!") == "dr_jane_o_brien"
+    assert slugify("   ") == "researcher"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        path = session_path("jane", datetime(2026, 7, 13, 15, 30, 0), base_dir=tmp_dir)
+        assert path.endswith(os.path.join("jane", "20260713_153000.json"))
+        save_session({"researcher": "jane", "turns": []}, path)
+        with open(path) as f:
+            loaded = json.load(f)
+        assert loaded["researcher"] == "jane"
+        assert not os.path.exists(path + ".tmp")  # atomic rename cleaned up the temp file
+    print("ok")
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] == "--test":
+        _selfcheck()
+        sys.exit(0)
+    main()
