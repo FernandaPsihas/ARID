@@ -6,7 +6,7 @@ ARID is a RAG (retrieval-augmented generation) pipeline that lets you ask natura
 ```
 python EGEpipeline/answer.py "how is neutrino energy reconstructed?"
 ```
-Returns a Claude-generated answer citing the exact files and line ranges it drew from.
+Returns an answer, generated entirely locally via Ollama, citing the exact files and line ranges it drew from.
 
 ---
 
@@ -28,10 +28,15 @@ chunks.jsonl        One chunk per line: {id, file, start/end line, symbol, langu
                └──► RRF fusion (search.py — combines dense + BM25, top-k)
                          │
                          ▼
-                    answer.py       Retrieve chunks → ground Claude → return answer + sources
+                    answer.py       Retrieve chunks → ground qwen3-coder:30b (Ollama) → answer + sources
 ```
 
 Hybrid retrieval falls back to BM25-only if Qdrant/Ollama aren't running — the pipeline is useful without the vector store.
+
+Generation runs locally too: `answer.py` and the MCP server (`arid_mcp.py`) both call
+`qwen3-coder:30b` via Ollama — a 30B-total / 3B-active MoE, so it's fast even without
+a huge GPU, and its ~19GB (Q4_K_M) footprint leaves plenty of VRAM headroom for the
+embedding model to run alongside it. No API key or separate CLI login needed.
 
 ---
 
@@ -82,17 +87,10 @@ requests a GPU device, so it can't fail to find one.
 ```
 docker compose exec app python EGEpipeline/search_bm25.py chunks.jsonl "APAChannelsIntersect"
 docker compose exec app python EGEpipeline/search.py "electron lifetime calibration"
+docker compose exec app python EGEpipeline/answer.py "how is neutrino energy reconstructed?"
 ```
-
-`answer.py`'s generation step shells out to the Claude Code CLI, which needs
-its own login — that's user-specific and isn't baked into the image. Either
-install and `claude login` inside the container yourself, or run `answer.py`
-from the host against the containerized Qdrant/Ollama (ports `6333`/`11434`
-are published to `localhost`):
-```
-pip install -r requirements.txt   # host-side, only needed for this path
-ARID_CLAUDE_EXE=claude python EGEpipeline/answer.py "how is neutrino energy reconstructed?"
-```
+`answer.py`'s generation step runs against the containerized Ollama, so it works
+out of the box — no separate login or API key needed.
 
 Useful env vars for `docker compose up` (set in your shell or a `.env` file):
 | Var | Default | Purpose |
@@ -108,6 +106,7 @@ Still works if you'd rather run things directly:
 ```
 pip install -r requirements.txt          # needs a C compiler (tree-sitter grammars)
 ollama pull qwen3-embedding:0.6b         # requires Ollama running locally
+ollama pull qwen3-coder:30b              # generation model used by answer.py / arid_mcp.py
 docker run -p 6333:6333 qdrant/qdrant    # requires Qdrant running locally
 git clone https://github.com/DUNE/dunereco.git
 python extract.py dunereco/                        # writes chunks.jsonl

@@ -36,7 +36,7 @@ def run(*args: str):
 
 def pull_models():
     import ollama
-    for model in ("qwen3-embedding:0.6b", "qwen2.5-coder:7b"):
+    for model in ("qwen3-embedding:0.6b", "qwen3-coder:30b"):
         log(f"pulling {model} (idempotent, skips if present)...")
         ollama.pull(model)
 
@@ -101,8 +101,7 @@ def main():
     log("ready. try:")
     log('  docker compose exec app python EGEpipeline/search_bm25.py chunks.jsonl "your query"')
     log('  docker compose exec app python EGEpipeline/search.py "your query"')
-    log('  docker compose exec app python EGEpipeline/answer.py "your query"   '
-        '# needs a Claude Code CLI + ARID_CLAUDE_EXE, see README')
+    log('  docker compose exec app python EGEpipeline/answer.py "your query"')
 
     # stay alive so `docker compose exec app ...` has a running container to attach to
     while True:

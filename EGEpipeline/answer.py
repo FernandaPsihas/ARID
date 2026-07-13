@@ -1,33 +1,32 @@
-"""RAG answer step: retrieve fused chunks, ground Claude on them, return the answer.
+"""RAG answer step: retrieve fused chunks, ground a local model on them, return the answer.
 
 Retrieval is hybrid (dense Qdrant + BM25, RRF-fused via search_codebase) when the
 vector store is up; if Qdrant/Ollama aren't available it falls back to BM25-only
 over chunks.jsonl, which is stdlib and always works -- so this runs before the
 vector store is provisioned.
 
-Generation goes through the Claude Code CLI as a subprocess (the same way the
-ARID/Jarvis Discord bots call Claude in assistant_core.py), NOT the Anthropic
-SDK. Auth comes from the CLI's own login, so no API key is needed. Override the
-exe with the ARID_CLAUDE_EXE env var.
+Generation runs entirely locally through Ollama (qwen3-coder:30b, a 30B-total /
+3B-active MoE -- fast on limited VRAM and leaves headroom on the GPU for the
+qwen3-embedding:0.6b embedding model to run alongside it). No API key or Claude
+CLI login needed. `arid_mcp.py` imports `_generate` from here so the MCP server
+and this CLI script always use the same model and prompt.
 
 Usage:
     python EGEpipeline/answer.py "how is neutrino energy reconstructed?"
 """
 
-import json
 import os
-import subprocess
 import sys
 
 sys.path.append(os.path.dirname(__file__))
 
-CLAUDE_EXE = os.environ.get(
-    "ARID_CLAUDE_EXE", r"C:\Users\Cephandrius\.local\bin\claude.exe"
-)
-GEN_MODEL = "opus"     # --model alias the CLI understands
-GEN_TIMEOUT = 240      # seconds for the claude -p call
-TOP_K = 6              # chunks fed as context
-SNIPPET = 2000         # max chars shown per chunk (big funcs get truncated in the prompt)
+GEN_MODEL = "qwen3-coder:30b"  # Ollama tag; pull with `ollama pull qwen3-coder:30b`
+NUM_CTX = 8192          # TOP_K=6 chunks * SNIPPET=2000 chars is ~4-5k tokens of context, so
+                        # this comfortably covers it. Measured: 32768 pushed Ollama's KV cache
+                        # to ~44GB (nearly the whole 48GB card), leaving no room for the
+                        # embedding model; 8192 keeps real headroom (`ollama ps` to check).
+TOP_K = 6               # chunks fed as context
+SNIPPET = 2000          # max chars shown per chunk (big funcs get truncated in the prompt)
 
 SYSTEM = (
     "You are a code assistant for the DUNE dunereco (LArSoft) codebase. "
@@ -66,27 +65,20 @@ def _retrieve(query: str, top_k: int) -> list[dict]:
 
 
 def _generate(query: str, chunks: list[dict]) -> str:
-    """Ground Claude on the retrieved snippets via the Claude Code CLI."""
+    """Ground the local model on the retrieved snippets via Ollama."""
+    import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
     prompt = f"Question: {query}\n\nCode snippets:\n\n{_format_context(chunks)}"
-    args = [CLAUDE_EXE, "-p", prompt, "--model", GEN_MODEL, "--tools", "",
-            "--append-system-prompt", SYSTEM, "--output-format", "json"]
-    env = dict(os.environ)
-    env["PONYTAIL_DEFAULT_MODE"] = "off"
-    # Windows: invisible console so claude.exe doesn't flash a window.
-    creationflags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-    res = subprocess.run(args, capture_output=True, text=True, encoding="utf-8",
-                         errors="replace", timeout=GEN_TIMEOUT,
-                         stdin=subprocess.DEVNULL, creationflags=creationflags)
-    raw = res.stdout or ""
-    i = raw.find('{"type":"result"')
-    if i == -1:
-        return "(generation failed) " + ((res.stderr or "").strip()[:300] or "no output")
-    obj = json.JSONDecoder().raw_decode(raw[i:])[0]
-    return (obj.get("result") or "(no reply)").strip()
+    resp = ollama.chat(
+        model=GEN_MODEL,
+        messages=[{"role": "system", "content": SYSTEM},
+                  {"role": "user", "content": prompt}],
+        options={"num_ctx": NUM_CTX},
+    )
+    return (resp["message"]["content"] or "(no reply)").strip()
 
 
 def answer(query: str, top_k: int = TOP_K) -> str:
-    """Retrieve, ground Claude, and return the answer plus its sources."""
+    """Retrieve, ground the local model, and return the answer plus its sources."""
     chunks = _retrieve(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found."

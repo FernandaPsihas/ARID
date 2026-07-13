@@ -13,10 +13,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(__file__))  # import sibling search.py / answer.py
 
-import ollama
 from mcp.server.fastmcp import FastMCP
 
-from answer import GEN_MODEL, NUM_CTX, SYSTEM, _format_context
+from answer import _generate
 from search import search_codebase
 
 mcp = FastMCP("arid")
@@ -35,7 +34,7 @@ def search_arid(query: str, top_k: int = 10) -> list[dict]:
 
 @mcp.tool()
 def ask_arid(query: str, top_k: int = 6) -> str:
-    """Retrieve from dunereco and return a grounded, cited answer (local qwen2.5-coder).
+    """Retrieve from dunereco and return a grounded, cited answer (local qwen3-coder:30b).
 
     Convenience tool: does the same retrieval as search_arid, then has the local
     model write a cited answer. Prefer search_arid if you want to compose the
@@ -44,14 +43,7 @@ def ask_arid(query: str, top_k: int = 6) -> str:
     chunks = search_codebase(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found in the dunereco codebase."
-    prompt = f"Question: {query}\n\nCode snippets:\n\n{_format_context(chunks)}"
-    resp = ollama.chat(
-        model=GEN_MODEL,
-        messages=[{"role": "system", "content": SYSTEM},
-                  {"role": "user", "content": prompt}],
-        options={"num_ctx": NUM_CTX},
-    )
-    body = resp["message"]["content"]
+    body = _generate(query, chunks)
     src = "\n".join(f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
     return f"{body}\n\nSources:\n{src}"
 
