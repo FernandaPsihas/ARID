@@ -64,29 +64,46 @@ def _retrieve(query: str, top_k: int) -> list[dict]:
         return _BM25.search(query, top_k=top_k)
 
 
-def _generate(query: str, chunks: list[dict]) -> str:
-    """Ground the local model on the retrieved snippets via Ollama."""
+def _generate(query: str, chunks: list[dict], stream: bool = False) -> str:
+    """Ground the local model on the retrieved snippets via Ollama.
+
+    stream=True prints tokens to stdout as they arrive (for interactive CLI use);
+    either way the full response text is returned. arid_mcp.py calls this with the
+    default stream=False since an MCP tool call returns one string, not a live feed.
+    """
     import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
     prompt = f"Question: {query}\n\nCode snippets:\n\n{_format_context(chunks)}"
-    resp = ollama.chat(
-        model=GEN_MODEL,
-        messages=[{"role": "system", "content": SYSTEM},
-                  {"role": "user", "content": prompt}],
-        options={"num_ctx": NUM_CTX},
-    )
-    return (resp["message"]["content"] or "(no reply)").strip()
+    messages = [{"role": "system", "content": SYSTEM}, {"role": "user", "content": prompt}]
+
+    if not stream:
+        resp = ollama.chat(model=GEN_MODEL, messages=messages, options={"num_ctx": NUM_CTX})
+        return (resp["message"]["content"] or "(no reply)").strip()
+
+    parts = []
+    for chunk in ollama.chat(model=GEN_MODEL, messages=messages,
+                              options={"num_ctx": NUM_CTX}, stream=True):
+        token = chunk["message"]["content"]
+        print(token, end="", flush=True)
+        parts.append(token)
+    print()
+    return "".join(parts).strip()
 
 
-def answer(query: str, top_k: int = TOP_K) -> str:
-    """Retrieve, ground the local model, and return the answer plus its sources."""
+def answer(query: str, top_k: int = TOP_K, stream: bool = False) -> str:
+    """Retrieve, ground the local model, and return the answer plus its sources.
+
+    If stream=True, the answer body is also printed live to stdout as it generates.
+    """
     chunks = _retrieve(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found."
-    body = _generate(query, chunks)
+    body = _generate(query, chunks, stream=stream)
     sources = "\n".join(
         f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}"
         for c in chunks
     )
+    if stream:
+        print(f"\nSources:\n{sources}")
     return f"{body}\n\nSources:\n{sources}"
 
 
@@ -105,4 +122,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 2 or sys.argv[1] == "--test":
         _selfcheck()
         sys.exit(0)
-    print(answer(" ".join(sys.argv[1:])))
+    answer(" ".join(sys.argv[1:]), stream=True)
