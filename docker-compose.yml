@@ -1,12 +1,18 @@
 services:
   qdrant:
     image: qdrant/qdrant
-    ports: ["6333:6333"]
+    # Host port is configurable so multiple researchers can run their own stack
+    # on one shared machine at once (each sets a different QDRANT_PORT in .env).
+    # The container port stays 6333 -- the app talks to it over the internal
+    # network as http://qdrant:6333 regardless of the host mapping.
+    ports: ["${QDRANT_PORT:-6333}:6333"]
     volumes: ["qdrant_data:/qdrant/storage"]
 
   ollama:
     image: ollama/ollama
-    ports: ["11434:11434"]
+    # Same story as qdrant: OLLAMA_PORT only changes the *host* binding, not the
+    # in-network address (http://ollama:11434) the app uses.
+    ports: ["${OLLAMA_PORT:-11434}:11434"]
     volumes: ["ollama_data:/root/.ollama"]
     environment:
       OLLAMA_NUM_PARALLEL: "8"   # match EMBED_WORKERS in embed_store.py, else requests just queue server-side

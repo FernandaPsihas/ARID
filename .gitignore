@@ -8,6 +8,9 @@ chunks.jsonl
 # researcher chat sessions from EGEpipeline/chat.py — local usage data, not source
 feedback/
 
+# per-researcher local overrides (project name + host ports). .env.example is tracked.
+.env
+
 # local-only, not shipped in the public repo
 CLAUDE.md
 CHANGELOG.md

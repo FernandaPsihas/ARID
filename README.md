@@ -72,6 +72,19 @@ as a "resume" command too. Follow progress with `docker compose logs -f app`;
 first run takes a while (repo clone + embedding — CPU embedding of the full
 dunereco corpus is tens of minutes), later runs are instant.
 
+**Sharing a host with other researchers?** Several people can each run their own
+ARID stack on the same machine at once — you just need a unique project name and
+distinct host ports so you don't collide on `arid-*` container names or the
+`6333`/`11434` host ports (`address already in use`). Copy the template and edit it:
+```
+cp .env.example .env      # set COMPOSE_PROJECT_NAME + QDRANT_PORT/OLLAMA_PORT to unique values
+```
+Compose reads `.env` automatically, so `docker compose up -d --build` then brings
+up *your* isolated stack. Nothing inside the pipeline changes — the container-internal
+ports and service addresses (`http://ollama:11434`, `http://qdrant:6333`) stay fixed;
+only the host-side bindings move. Each project name gets its own volumes, so you
+pull the models / embed the corpus once for yourself.
+
 **Have an NVIDIA GPU?** Add the GPU override for much faster embedding:
 ```
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
