@@ -4,9 +4,18 @@ __pycache__/
 # extraction inputs/outputs — not part of ARID history
 dunereco/
 chunks.jsonl
+chunks_partial.jsonl
+chunks_partial.manifest.json
+chunks_quarkylab.jsonl
+
+# generated eval run reports — regenerate via bench_ab.py/bench_retrieval.py, not source
+EGEpipeline/eval/ab_report_*
+EGEpipeline/eval/retrieval_report_*
 
 # researcher chat sessions from EGEpipeline/chat.py — local usage data, not source
 feedback/
+
+*.log
 
 # per-researcher local overrides (project name + host ports). .env.example is tracked.
 .env
