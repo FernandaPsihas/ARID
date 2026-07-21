@@ -8,9 +8,10 @@ chunks_partial.jsonl
 chunks_partial.manifest.json
 chunks_quarkylab.jsonl
 
-# generated eval run reports — regenerate via bench_ab.py/bench_retrieval.py, not source
+# generated eval run reports — regenerate via bench_ab.py/bench_retrieval.py/temp_sweep.py, not source
 EGEpipeline/eval/ab_report_*
 EGEpipeline/eval/retrieval_report_*
+EGEpipeline/eval/temp_sweep_*
 
 # researcher chat sessions from EGEpipeline/chat.py — local usage data, not source
 feedback/
