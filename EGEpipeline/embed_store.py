@@ -13,8 +13,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "..")) # allow import fr
 # we need that so we can do this
 from chunk_schema import validate_chunk
 
-EMBED_MODEL = "qwen3-embedding:0.6b"
-COLLECTION  = "dunereco"
+EMBED_MODEL = os.environ.get("ARID_EMBED_MODEL", "qwen3-embedding:0.6b")
+COLLECTION  = os.environ.get("ARID_EMBED_COLLECTION", "dunereco")
 QDRANT_URL  = os.environ.get("QDRANT_URL", "http://localhost:6333")  # service name in docker, localhost otherwise
 BATCH_SIZE  = 32
 

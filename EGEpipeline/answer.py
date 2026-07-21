@@ -18,6 +18,8 @@ Usage:
 import os
 import sys
 
+import ollama
+
 sys.path.append(os.path.dirname(__file__))
 
 GEN_MODEL = "qwen3-coder:30b"  # Ollama tag; pull with `ollama pull qwen3-coder:30b`

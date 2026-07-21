@@ -1,4 +1,4 @@
-# parsers — python/cpp/jsonnet use tree-sitter; fcl uses the stdlib brace chunker
+# parsers — python/cpp/jsonnet use tree-sitter; fcl uses an in-house recursive-descent parser (parsers/parse_fcl.py), not tree-sitter
 tree-sitter==0.25.2
 tree-sitter-python==0.25.0
 tree-sitter-cpp==0.23.4

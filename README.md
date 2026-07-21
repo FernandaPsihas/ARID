@@ -162,7 +162,7 @@ ARID/
 │   ├── parse_cpp.py        C++ parser (tree-sitter)
 │   ├── parse_python.py     Python parser (tree-sitter)
 │   ├── parse_jsonnet.py    Jsonnet parser (tree-sitter)
-│   ├── parse_fcl.py        FHiCL parser (in-house tree-sitter)
+│   ├── parse_fcl.py        FHiCL parser (in-house recursive-descent parser, not tree-sitter)
 │   └── brace_chunker.py    Shared brace-depth chunking utility
 ├── EGEpipeline/
 │   ├── embed_store.py      Embedding + Qdrant indexing + dense search
