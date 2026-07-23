@@ -1,0 +1,71 @@
+# Shared ARID services -- ONE Qdrant + ONE Ollama that every researcher queries.
+#
+# Stand this up ONCE on the shared host (its own fixed project name, so it's
+# independent of whose checkout it's started from):
+#
+#   docker compose -f docker-compose.shared.yml -f docker-compose.gpu.yml up -d qdrant ollama
+#   docker compose -f docker-compose.shared.yml -f docker-compose.gpu.yml run --rm provision
+#
+# ALWAYS pass -f docker-compose.gpu.yml on a GPU host, on EVERY `up`. It is not
+# sticky: a later `up -d` without it silently recreates ollama in CPU-only mode
+# with no error, ~3.5x slower. Verify with:
+#   docker logs arid-shared-ollama-1 2>&1 | grep 'inference compute'   # want library=CUDA
+# On a host with no NVIDIA GPU, drop the gpu override from both lines.
+#
+# The models load ONCE into VRAM regardless of how many researchers query
+# (Ollama serves them concurrently via OLLAMA_NUM_PARALLEL), and the corpus is
+# embedded ONCE into the shared Qdrant -- so there's no per-user VRAM/disk
+# duplication. Researchers then point their own repo clones at localhost:6333 /
+# localhost:11434 (the defaults) and only ever READ. Re-provisioning is safe at
+# any time: bootstrap -> embed_store -> qdrant_index build a fresh collection and
+# atomically swap an alias, so live queries never see a partial index.
+name: arid-shared
+
+services:
+  qdrant:
+    image: qdrant/qdrant
+    restart: unless-stopped
+    # Overridable in case 6333 is taken, but for the ONE shared stack the default
+    # is what every researcher's client expects.
+    ports: ["${QDRANT_PORT:-6333}:6333"]
+    volumes: ["qdrant_data:/qdrant/storage"]
+    # No healthcheck here: the qdrant image has no shell/curl to probe with, and
+    # bootstrap.py's wait_for_qdrant() already polls readiness before embedding,
+    # so provision depends on this with `service_started` (see below).
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    ports: ["${OLLAMA_PORT:-11434}:11434"]
+    volumes: ["ollama_data:/root/.ollama"]
+    environment:
+      OLLAMA_NUM_PARALLEL: "8"   # serve concurrent researcher requests against the one loaded model
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  # One-shot provisioner: pulls models, clones dunereco, extracts chunks, and
+  # embeds+indexes into the shared Qdrant via the safe rebuild, then exits.
+  # Idempotent -- re-running is a fast no-op unless the corpus changed. Gated
+  # behind a profile so a plain `up` only starts the long-running services.
+  provision:
+    build: .
+    profiles: ["provision"]
+    depends_on:
+      qdrant:
+        condition: service_started
+      ollama:
+        condition: service_healthy
+    environment:
+      QDRANT_URL: http://qdrant:6333     # in-network: reach the services by name
+      OLLAMA_HOST: http://ollama:11434
+      FORCE_EMBED: "${FORCE_EMBED:-}"    # set to 1 to force a rebuild even if current
+    volumes:
+      - ./:/app          # dunereco clone + chunks.jsonl are written into the host checkout
+    command: ["python", "docker/bootstrap.py"]
+
+volumes:
+  qdrant_data:
+  ollama_data:

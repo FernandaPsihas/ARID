@@ -1,7 +1,7 @@
 """FHiCL (.fcl) parser for ARID (KAN-5).
 
 Real recursive-descent parser over a FHiCL token stream, replacing the old
-brace-depth heuristic (parsers/brace_chunker.py). Grammar per the FHiCL spec
+brace-depth heuristic. Grammar per the FHiCL spec
 (mu2e grammar_draft3 + fhicl redmine wiki):
 
     document   ::= (include | BEGIN_PROLOG | END_PROLOG | definition)*

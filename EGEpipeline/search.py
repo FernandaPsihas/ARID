@@ -11,10 +11,29 @@ CHUNKS_PATH = os.path.join(os.path.dirname(__file__), "..", "chunks.jsonl")
 SCHEMA_FIELDS = ("id", "file", "start_line", "end_line", "symbol", "language", "text")
 
 _bm25 = None
-def _get_bm25() -> BM25:
-    global _bm25
-    if _bm25 is None:  # ponytail: rebuild once per process, cheap at ~6k chunks
-        _bm25 = BM25(load_chunks(CHUNKS_PATH))
+_bm25_tried = False
+def _get_bm25() -> BM25 | None:
+    """BM25 index over the local chunks.jsonl, or None if it isn't present.
+
+    On the shared-services setup a researcher can query purely against the shared
+    Qdrant without ever extracting chunks.jsonl locally. Missing that file used to
+    crash retrieval; now it just disables the BM25 half and we run dense-only.
+    """
+    global _bm25, _bm25_tried
+    if _bm25 is None and not _bm25_tried:  # ponytail: build once per process, cheap at ~6k chunks
+        _bm25_tried = True
+        if not os.path.exists(CHUNKS_PATH):
+            # Fresh clone, no local chunks.jsonl: pull it back out of the shared
+            # Qdrant so the BM25 half works without a manual sync_chunks step.
+            # Runs at most once (the file then exists); degrades to dense-only if
+            # Qdrant is unreachable, so it never blocks a query.
+            from sync_chunks import ensure_chunks
+            ensure_chunks(CHUNKS_PATH)
+        try:
+            _bm25 = BM25(load_chunks(CHUNKS_PATH))
+        except FileNotFoundError:
+            print(f"warning: {CHUNKS_PATH} not found and could not be auto-synced from "
+                  "Qdrant; BM25 disabled, using dense-only.", file=sys.stderr)
     return _bm25
 
 
@@ -31,14 +50,21 @@ def _rrf(*ranked_lists, k=RRF_K):
 
 def search_codebase(query: str, top_k: int = 10, pool: int = 10) -> list[dict]:
     """Hybrid search -> list of chunk-schema dicts (+ rrf score), best first."""
-    from embed_store import search_dense  # lazy: pulls in qdrant/ollama only when used
-
     try:
+        from embed_store import search_dense  # lazy: pulls in qdrant/ollama only when used
         dense = search_dense(query, top_k=pool)
     except Exception as e:  # ponytail: qdrant/ollama down (dead tunnel) -> BM25-only, not a crash
         print(f"warning: dense search unavailable ({e}); falling back to BM25-only", file=sys.stderr)
         dense = []
-    scores, meta = _rrf(dense, _get_bm25().search(query, top_k=pool))
+    bm25 = _get_bm25()
+    sparse = bm25.search(query, top_k=pool) if bm25 is not None else []
+    if not dense and not sparse:
+        # both halves are unavailable (no shared store reachable AND no local
+        # chunks.jsonl) -- nothing to retrieve. Callers treat [] as "no hits".
+        print("warning: neither dense (Qdrant) nor BM25 (chunks.jsonl) retrieval is "
+              "available; returning no results", file=sys.stderr)
+        return []
+    scores, meta = _rrf(dense, sparse)
     ranked = sorted(scores, key=scores.get, reverse=True)[:top_k]
     out = []
     for cid in ranked:
