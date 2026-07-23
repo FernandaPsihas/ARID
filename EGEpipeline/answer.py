@@ -18,9 +18,12 @@ Usage:
 import os
 import sys
 
-import ollama
-
-sys.path.append(os.path.dirname(__file__))
+# Guarantee we're running under the repo .venv with deps installed (building it
+# on first run if needed) BEFORE importing anything third-party. Shared across
+# the entry points via env_setup; may re-exec the process, so keep it first.
+sys.path.insert(0, os.path.dirname(__file__))
+from env_setup import ensure_env
+ensure_env()
 
 GEN_MODEL = "qwen3-coder:30b"  # Ollama tag; pull with `ollama pull qwen3-coder:30b`
 NUM_CTX = 8192          # TOP_K=6 chunks * SNIPPET=2000 chars is ~4-5k tokens of context, so
@@ -42,7 +45,13 @@ SYSTEM = (
     "If the snippets don't contain the answer, say so plainly -- do not invent code."
 )
 
-_BM25 = None  # cached BM25 index for the fallback path
+class GenerationUnavailable(RuntimeError):
+    """The local generation model couldn't be reached or run.
+
+    Retrieval can still have succeeded -- this only covers the generate step, so
+    callers catch it and surface the retrieved sources with a clear message
+    instead of dumping a raw traceback (e.g. wrong Python env, or the shared
+    Ollama being down)."""
 
 
 def _format_context(chunks: list[dict]) -> str:
@@ -54,21 +63,11 @@ def _format_context(chunks: list[dict]) -> str:
 
 
 def _retrieve(query: str, top_k: int) -> list[dict]:
-    """Hybrid retrieval, falling back to BM25-only if dense search is unavailable."""
-    try:
-        from search import search_codebase  # lazy: pulls qdrant/ollama/bm25 only when run
-        return search_codebase(query, top_k=top_k)
-    except Exception as e:
-        # Qdrant/Ollama not up (or qdrant-client/ollama not installed yet) --
-        # BM25-only still gives useful results and needs nothing but chunks.jsonl.
-        print(f"[ask] dense retrieval unavailable ({type(e).__name__}: {e}); "
-              "using BM25-only.", file=sys.stderr)
-        from search import CHUNKS_PATH
-        from search_bm25 import BM25, load_chunks
-        global _BM25
-        if _BM25 is None:
-            _BM25 = BM25(load_chunks(CHUNKS_PATH))
-        return _BM25.search(query, top_k=top_k)
+    """Hybrid retrieval. search_codebase degrades on its own -- BM25-only if the
+    dense side (Qdrant/Ollama) is down, dense-only if there's no local chunks.jsonl,
+    and [] with a warning only if both halves are unavailable."""
+    from search import search_codebase  # lazy: pulls qdrant/ollama/bm25 only when run
+    return search_codebase(query, top_k=top_k)
 
 
 def _generate(query: str, chunks: list[dict], stream: bool = False,
@@ -87,7 +86,15 @@ def _generate(query: str, chunks: list[dict], stream: bool = False,
     temperature overrides TEMPERATURE -- used by eval/temp_sweep.py to compare
     settings without touching the module default.
     """
-    import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
+    try:
+        import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
+    except ModuleNotFoundError as e:
+        raise GenerationUnavailable(
+            "the `ollama` package isn't installed in this Python environment — "
+            "activate the project venv (`source .venv/bin/activate`) or run inside "
+            "the Docker app container."
+        ) from e
+
     prompt = f"Question: {query}\n\nCode snippets:\n\n{_format_context(chunks)}"
     messages = [{"role": "system", "content": SYSTEM}, *(history or []),
                 {"role": "user", "content": prompt}]
@@ -95,18 +102,28 @@ def _generate(query: str, chunks: list[dict], stream: bool = False,
     temp = TEMPERATURE if temperature is None else temperature
     options = {"num_ctx": ctx, "temperature": temp}
 
-    if not stream:
-        resp = ollama.chat(model=GEN_MODEL, messages=messages, options=options)
-        return (resp["message"]["content"] or "(no reply)").strip()
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    try:
+        if not stream:
+            resp = ollama.chat(model=GEN_MODEL, messages=messages, options=options)
+            return (resp["message"]["content"] or "(no reply)").strip()
 
-    parts = []
-    for chunk in ollama.chat(model=GEN_MODEL, messages=messages,
-                              options=options, stream=True):
-        token = chunk["message"]["content"]
-        print(token, end="", flush=True)
-        parts.append(token)
-    print()
-    return "".join(parts).strip()
+        parts = []
+        for chunk in ollama.chat(model=GEN_MODEL, messages=messages,
+                                  options=options, stream=True):
+            token = chunk["message"]["content"]
+            print(token, end="", flush=True)
+            parts.append(token)
+        print()
+        return "".join(parts).strip()
+    except Exception as e:
+        # Down service, model not pulled, connection refused, etc. -> a clear,
+        # actionable error instead of a raw traceback out of the CLI/chat loop.
+        raise GenerationUnavailable(
+            f"couldn't reach the Ollama generation service at {host} "
+            f"({type(e).__name__}: {e}). Check it's running and OLLAMA_HOST is right; "
+            f"the model '{GEN_MODEL}' must be pulled there."
+        ) from e
 
 
 def answer(query: str, top_k: int = TOP_K, stream: bool = False) -> str:
@@ -117,11 +134,18 @@ def answer(query: str, top_k: int = TOP_K, stream: bool = False) -> str:
     chunks = _retrieve(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found."
-    body = _generate(query, chunks, stream=stream)
     sources = "\n".join(
         f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}"
         for c in chunks
     )
+    try:
+        body = _generate(query, chunks, stream=stream)
+    except GenerationUnavailable as e:
+        # Retrieval worked; only generation is down. Still return the sources so
+        # the researcher gets the relevant files even without a written answer.
+        body = f"[generation unavailable] {e}"
+        if stream:
+            print(body)
     if stream:
         print(f"\nSources:\n{sources}")
     return f"{body}\n\nSources:\n{sources}"

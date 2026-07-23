@@ -1,0 +1,9 @@
+# Query-only dependencies -- everything you need to run search.py / answer.py /
+# chat.py against the shared Qdrant + Ollama.
+#
+# Deliberately NOT the full requirements.txt: that pulls the tree-sitter
+# grammars, which compile from source and need a C toolchain. Those are only
+# used by extract.py to BUILD chunks.jsonl -- and researchers don't need to,
+# since sync_chunks.py pulls the same chunks back out of the shared Qdrant.
+qdrant-client
+ollama

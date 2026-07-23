@@ -14,8 +14,8 @@ FILES = {
     "code/foo.py": "def greet(name):\n    return name\n",
     "code/bar.cc": "int add(int a, int b) {\n    return a + b;\n}\n",
     "cfg/job.fcl": "physics: {\n    producer: x\n}\n",
-    # no braces anywhere -> parser returns [] -> must become a whole-file fallback
-    "cfg/flat.fcl": "#include \"base.fcl\"\nthreshold: 0.5\n",
+    # nothing parseable (comment only) -> parser returns [] -> whole-file fallback
+    "cfg/flat.fcl": "# just a comment, nothing to parse here\n",
 }
 
 

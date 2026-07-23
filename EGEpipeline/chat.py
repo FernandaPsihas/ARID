@@ -20,9 +20,14 @@ import sys
 import time
 from datetime import datetime
 
-sys.path.append(os.path.dirname(__file__))
+# Guarantee we're running under the repo .venv with deps installed (building it
+# on first run if needed) BEFORE importing anything third-party. Shared across
+# the entry points via env_setup; may re-exec the process, so keep it first.
+sys.path.insert(0, os.path.dirname(__file__))
+from env_setup import ensure_env
+ensure_env()
 
-from answer import GEN_MODEL, TOP_K, _generate, _retrieve
+from answer import GEN_MODEL, TOP_K, GenerationUnavailable, _generate, _retrieve
 
 FEEDBACK_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "feedback")
 CHAT_NUM_CTX = 16384    # bumped over answer.py's 8192: multi-turn history adds a bit of
@@ -138,15 +143,22 @@ def main() -> None:
                 print("No relevant chunks found in the dunereco codebase.\n")
                 continue
 
-            print()
-            body = _generate(question, chunks, stream=True,
-                              history=history[-2 * MAX_HISTORY_TURNS:], num_ctx=CHAT_NUM_CTX)
-            elapsed = time.time() - t0
-
             sources = [{"file": c["file"], "start_line": c["start_line"],
                         "end_line": c["end_line"], "symbol": c["symbol"]} for c in chunks]
             src_text = "\n".join(
                 f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
+
+            print()
+            try:
+                body = _generate(question, chunks, stream=True,
+                                 history=history[-2 * MAX_HISTORY_TURNS:], num_ctx=CHAT_NUM_CTX)
+            except GenerationUnavailable as e:
+                # Keep the session alive: show what we retrieved and let them ask again.
+                print(f"\n[generation unavailable] {e}")
+                print(f"\nSources (retrieval still worked):\n{src_text}\n")
+                continue
+            elapsed = time.time() - t0
+
             print(f"\nSources:\n{src_text}")
             print(f"({elapsed:.1f}s)")
 

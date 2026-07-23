@@ -45,9 +45,6 @@ def _name(node, child_type):
 
 
 def parse_jsonnet(filepath: str) -> list[dict]:
-    # --- old brace-chunker fallback (kept for easy revert) ---
-    # from parsers.brace_chunker import brace_chunk
-    # return brace_chunk(filepath, "jsonnet")
     try:
         with open(filepath, "rb") as f:
             source = f.read()

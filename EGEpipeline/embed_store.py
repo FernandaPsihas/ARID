@@ -6,15 +6,23 @@ import uuid
 
 import ollama
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import PointStruct
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "..")) # allow import from parent dir (testing for demo, we can yeet this later)
+sys.path.append(os.path.dirname(__file__))  # sibling qdrant_index
 
 # we need that so we can do this
 from chunk_schema import validate_chunk
+import qdrant_index as qi
 
 EMBED_MODEL = os.environ.get("ARID_EMBED_MODEL", "qwen3-embedding:0.6b")
-COLLECTION  = os.environ.get("ARID_EMBED_COLLECTION", "dunereco")
+# Reads target the shared ALIAS by default -- qdrant_index maintains it, and Qdrant
+# resolves it to whichever physical collection is currently live, so re-indexing can
+# swap the data underneath queries without any reader noticing (see qdrant_index.py).
+# ARID_EMBED_COLLECTION still overrides this, for eval work that needs to query a
+# specific bake-off collection directly instead of the live alias (e.g.
+# eval/bench_retrieval.py's --collection flag).
+COLLECTION  = os.environ.get("ARID_EMBED_COLLECTION", qi.ALIAS)
 QDRANT_URL  = os.environ.get("QDRANT_URL", "http://localhost:6333")  # service name in docker, localhost otherwise
 BATCH_SIZE  = 32
 
@@ -32,7 +40,7 @@ MAX_EMBED_CHARS = 6000
 # chunks are embedded BATCH_SIZE at a time in one request; WORKERS such batched
 # requests run concurrently so the GPU has back-to-back work queued instead of
 # idling between round trips. Match OLLAMA_NUM_PARALLEL on the server
-# (docker-compose.yml) or these just queue up there instead of running concurrently.
+# (docker-compose.shared.yml) or these just queue up there instead of running concurrently.
 WORKERS = int(os.environ.get("EMBED_WORKERS", 8))
 
 #couple helpers
@@ -54,30 +62,11 @@ def _chunk_id_to_uuid(chunk_id: str) -> str:
     # qdrant only takes uuids, so we do a little conversion
     return str(uuid.uuid5(uuid.NAMESPACE_DNS, chunk_id))
 
-#into setup
-
-def setup():
-    # ready collection, delete if its alr there, demo
-    vector_dim = _dim()
-    if _client.collection_exists(COLLECTION):
-        _client.delete_collection(COLLECTION)
-    _client.create_collection(
-        collection_name=COLLECTION,
-        vectors_config=VectorParams(size=vector_dim, distance=Distance.COSINE),
-    )
-    print(f"Collection '{COLLECTION}' ready  (dim={vector_dim})")
-
-
 # indexing
-def index_chunks(chunks: list[dict]):
-    # validate, embed, store (batched)
-    bad = [(i, errs) for i, c in enumerate(chunks) if (errs := validate_chunk(c))]
-    if bad:
-        print(f"Validation failed on {len(bad)} chunk(s):")
-        for i, errs in bad:
-            print(f"  chunk[{i}] (id={chunks[i].get('id', '?')}): {errs}")
-        sys.exit(1)
- 
+def index_into(collection: str, chunks: list[dict]):
+    # embed + store (batched) into an already-created `collection`. Callers only
+    # ever pass a fresh throwaway collection here (see rebuild), never the live
+    # one, so a failure or interruption can't damage what queries are reading.
     total = len(chunks)
     failed = []
     done = 0
@@ -132,7 +121,7 @@ def index_chunks(chunks: list[dict]):
                 )
 
             if points:
-                _client.upsert(collection_name=COLLECTION, points=points)
+                _client.upsert(collection_name=collection, points=points)
             print(f"  {done}/{total} chunks indexed")
 
     if failed:
@@ -140,7 +129,30 @@ def index_chunks(chunks: list[dict]):
         with open("embed_errors.json", "w") as f:
             _json.dump(failed, f, indent=2)
         print(f"\n{len(failed)} chunks failed — see embed_errors.json")
-    print(f"\nDone. {total - len(failed)}/{total} chunks stored in Qdrant.")
+    print(f"\nDone. {total - len(failed)}/{total} chunks stored in {collection}.")
+
+
+def rebuild(chunks: list[dict], *, force: bool = False) -> str | None:
+    """Validate + (re)index the corpus into the shared store, safely.
+
+    Delegates the concurrency-safe dance (build a fresh uniquely-named collection,
+    atomically swap the alias, clean up orphans) to qdrant_index.rebuild; this just
+    supplies the embed step and up-front validation. Returns the live collection
+    name, or None if the build was skipped because the index already matches.
+    """
+    bad = [(i, errs) for i, c in enumerate(chunks) if (errs := validate_chunk(c))]
+    if bad:
+        print(f"Validation failed on {len(bad)} chunk(s):")
+        for i, errs in bad:
+            print(f"  chunk[{i}] (id={chunks[i].get('id', '?')}): {errs}")
+        sys.exit(1)
+
+    dim = _dim()
+    return qi.rebuild(
+        _client, chunks, dim,
+        embed_into=lambda collection: index_into(collection, chunks),
+        force=force,
+    )
 
 def search_dense(query: str, top_k: int = 20) -> list[dict]:
     hits = _client.query_points(
@@ -164,17 +176,23 @@ def search_dense(query: str, top_k: int = 20) -> list[dict]:
 
 #cli
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python embed_store.py <chunks.jsonl>")
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    if not args:
+        print("Usage: python embed_store.py <chunks.jsonl> [--force]")
+        print("  --force  rebuild even if the store already matches these chunks")
         sys.exit(1)
 
-    with open(sys.argv[1], encoding="utf-8") as f:
+    with open(args[0], encoding="utf-8") as f:
         chunks = [json.loads(line) for line in f if line.strip()]  # JSONL, matches extract.py output
- 
-    print(f"Loaded {len(chunks)} chunks from {sys.argv[1]}")
-    setup()
-    index_chunks(chunks)
- 
+
+    print(f"Loaded {len(chunks)} chunks from {args[0]}")
+    # FORCE_EMBED stays supported for the bootstrap/env path; --force is the CLI equivalent.
+    force = "--force" in flags or os.environ.get("FORCE_EMBED") == "1"
+    live = rebuild(chunks, force=force)
+    if live is None:
+        sys.exit(0)  # skipped: index already matches the corpus
+
     test_query = "electron lifetime calibration"
     print(f"\nTest query:'{test_query}':")
     for r in search_dense(test_query, top_k=3):

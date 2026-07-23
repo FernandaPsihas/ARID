@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))  # import sibling search.py / answ
 
 from mcp.server.fastmcp import FastMCP
 
-from answer import _generate
+from answer import GenerationUnavailable, _generate
 from search import search_codebase
 
 mcp = FastMCP("arid")
@@ -43,8 +43,12 @@ def ask_arid(query: str, top_k: int = 6) -> str:
     chunks = search_codebase(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found in the dunereco codebase."
-    body = _generate(query, chunks)
     src = "\n".join(f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
+    try:
+        body = _generate(query, chunks)
+    except GenerationUnavailable as e:
+        # Return the retrieved sources rather than erroring the whole tool call.
+        return f"[generation unavailable] {e}\n\nSources:\n{src}"
     return f"{body}\n\nSources:\n{src}"
 
 

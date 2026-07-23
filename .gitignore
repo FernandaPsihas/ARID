@@ -24,3 +24,6 @@ feedback/
 # local-only, not shipped in the public repo
 CLAUDE.md
 CHANGELOG.md
+
+# one-time local migration override, not shipped
+docker-compose.migrate.yml

@@ -78,17 +78,18 @@ def wait_for_qdrant(retries: int = 30, delay: float = 1.0):
 
 
 def embed_and_index():
-    client = wait_for_qdrant()
-    points = 0
-    if client.collection_exists("dunereco"):
-        points = client.get_collection("dunereco").points_count or 0
-
-    if not FORCE_EMBED and points > 0:
-        log(f"Qdrant collection already has {points} points, skipping embed "
-            "(set FORCE_EMBED=1 to redo)")
-        return
-    log("embedding + indexing chunks (this is the slow step, ~3-10 min depending on GPU)...")
-    run(sys.executable, "EGEpipeline/embed_store.py", "chunks.jsonl")
+    # Wait for Qdrant, then hand off to embed_store.py's SAFE rebuild: it
+    # fingerprints the corpus and skips if the shared index already matches
+    # (so re-running provision is a fast no-op), otherwise builds into a fresh
+    # collection and atomically swaps the alias -- concurrent queries never see a
+    # partial index, and an interrupted run leaves the live index untouched.
+    # See EGEpipeline/qdrant_index.py. FORCE_EMBED=1 forces a rebuild anyway.
+    wait_for_qdrant()
+    log("embedding + indexing chunks (safe rebuild; skips if already current)...")
+    args = [sys.executable, "EGEpipeline/embed_store.py", "chunks.jsonl"]
+    if FORCE_EMBED:
+        args.append("--force")
+    run(*args)
 
 
 def main():
@@ -98,14 +99,10 @@ def main():
     extract_chunks()
     embed_and_index()
 
-    log("ready. try:")
-    log('  docker compose exec app python EGEpipeline/search_bm25.py chunks.jsonl "your query"')
-    log('  docker compose exec app python EGEpipeline/search.py "your query"')
-    log('  docker compose exec app python EGEpipeline/answer.py "your query"')
-
-    # stay alive so `docker compose exec app ...` has a running container to attach to
-    while True:
-        time.sleep(3600)
+    log("provisioning complete. Query the shared services with:")
+    log('  python EGEpipeline/search.py "your query"')
+    log('  python EGEpipeline/answer.py "your query"')
+    log('  python EGEpipeline/chat.py')
 
 
 if __name__ == "__main__":
