@@ -30,7 +30,12 @@ def _rrf(*ranked_lists, k=RRF_K):
 
 
 def search_codebase(query: str, top_k: int = 10, pool: int = 10) -> list[dict]:
-    """Hybrid search -> list of chunk-schema dicts (+ rrf score), best first."""
+    """Hybrid search -> list of chunk-schema dicts (+ rrf score), best first.
+
+    Deduped to one chunk per (file, symbol) group so a cluster of near-duplicate
+    top hits for one implementation can't crowd a second, distinct one out of top_k
+    (7/20 meeting item 2 -- "return all implementations, not just one").
+    """
     from embed_store import search_dense  # lazy: pulls in qdrant/ollama only when used
 
     try:
@@ -39,7 +44,12 @@ def search_codebase(query: str, top_k: int = 10, pool: int = 10) -> list[dict]:
         print(f"warning: dense search unavailable ({e}); falling back to BM25-only", file=sys.stderr)
         dense = []
     scores, meta = _rrf(dense, _get_bm25().search(query, top_k=pool))
-    ranked = sorted(scores, key=scores.get, reverse=True)[:top_k]
+    best_per_group = {}
+    for cid in scores:
+        group = (meta[cid]["file"], meta[cid]["symbol"])
+        if group not in best_per_group or scores[cid] > scores[best_per_group[group]]:
+            best_per_group[group] = cid
+    ranked = sorted(best_per_group.values(), key=scores.get, reverse=True)[:top_k]
     out = []
     for cid in ranked:
         r = meta[cid]
