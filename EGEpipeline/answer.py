@@ -32,11 +32,16 @@ NUM_CTX = 8192          # TOP_K=6 chunks * SNIPPET=2000 chars is ~4-5k tokens of
                         # embedding model; 8192 keeps real headroom (`ollama ps` to check).
 TOP_K = 6               # chunks fed as context
 SNIPPET = 2000          # max chars shown per chunk (big funcs get truncated in the prompt)
+TEMPERATURE = 0.2       # lower than Ollama's ~0.8 default -- grounded citation answers
+                        # should be deterministic, not creative (7/20 meeting item 3)
 
 SYSTEM = (
     "You are a code assistant for the DUNE dunereco (LArSoft) codebase. "
     "Answer the question using ONLY the code snippets provided. Cite the file and "
     "line range for each claim, e.g. (FDSensOpt/NeutrinoEnergyRecoAlg.cc L146-178). "
+    "If the snippets show more than one distinct implementation of the thing asked "
+    "about (different files/algorithms/symbols), enumerate every one you see instead "
+    "of answering with just the first. "
     "If the snippets don't contain the answer, say so plainly -- do not invent code."
 )
 
@@ -66,7 +71,8 @@ def _retrieve(query: str, top_k: int) -> list[dict]:
 
 
 def _generate(query: str, chunks: list[dict], stream: bool = False,
-               history: list[dict] | None = None, num_ctx: int | None = None) -> str:
+               history: list[dict] | None = None, num_ctx: int | None = None,
+               temperature: float | None = None) -> str:
     """Ground the local model on the retrieved snippets via Ollama.
 
     stream=True prints tokens to stdout as they arrive (for interactive CLI use);
@@ -76,6 +82,9 @@ def _generate(query: str, chunks: list[dict], stream: bool = False,
     history, if given, is a list of prior {"role": "user"/"assistant", "content": ...}
     turns (plain question/answer text, no code chunks -- chat.py uses this for
     multi-turn sessions so old turns don't re-inflate the prompt with stale snippets).
+
+    temperature overrides TEMPERATURE -- used by eval/temp_sweep.py to compare
+    settings without touching the module default.
     """
     try:
         import ollama  # lazy: keeps BM25-only / self-check paths dependency-free
@@ -90,16 +99,18 @@ def _generate(query: str, chunks: list[dict], stream: bool = False,
     messages = [{"role": "system", "content": SYSTEM}, *(history or []),
                 {"role": "user", "content": prompt}]
     ctx = num_ctx or NUM_CTX
+    temp = TEMPERATURE if temperature is None else temperature
+    options = {"num_ctx": ctx, "temperature": temp}
 
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
     try:
         if not stream:
-            resp = ollama.chat(model=GEN_MODEL, messages=messages, options={"num_ctx": ctx})
+            resp = ollama.chat(model=GEN_MODEL, messages=messages, options=options)
             return (resp["message"]["content"] or "(no reply)").strip()
 
         parts = []
         for chunk in ollama.chat(model=GEN_MODEL, messages=messages,
-                                  options={"num_ctx": ctx}, stream=True):
+                                  options=options, stream=True):
             token = chunk["message"]["content"]
             print(token, end="", flush=True)
             parts.append(token)

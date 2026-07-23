@@ -1,6 +1,6 @@
 {
   "about": "ARID gold query set (KAN-24 starter). Each row = a natural-language question + the chunk(s) that correctly answer it (the 'relevant set'). Used to score embedding models via Recall@k / MRR (KAN-25). Run the same set over each model's retrieval and compare.",
-  "provenance": "Drafted by Jarvis 2026-06-25 by PATTERN-MATCHING symbol names in chunks.jsonl, NOT by reading function bodies. Every row is status 'unverified-name-match' until an ARID specialist (Ari/Kieran) opens the target and confirms it. Verification job = KAN-24.",
+  "provenance": "Drafted by Jarvis 2026-06-25 by PATTERN-MATCHING symbol names in chunks.jsonl, NOT by reading function bodies. Every row is status 'unverified-name-match' until an ARID specialist (Ari/Kieran) opens the target and confirms it. Verification job = KAN-24. (2026-07-14: all 7 rows below verified by Jarvis actually reading each target function body -- see EGEpipeline/eval/gold.jsonl for the reformatted, merged copy with per-row verification notes. Still worth a domain-physicist spot-check, not a substitute for that, just confirms the code does what the symbol name claims.)",
   "grading_rules": [
     "A query may have MORE THAN ONE correct chunk; list ALL of them in 'expected' or a model that retrieves the other valid chunk gets wrongly marked a miss.",
     "Per row, set 'status' to one of: confirmed | fix-target (replace with the better chunk) | toss (bad question).",
@@ -12,43 +12,43 @@
       "id": 1,
       "query": "How do I get the CVN classification results for an event?",
       "expected": [{"file": "dunereco/AnaUtils/DUNEAnaEventUtils.cxx", "symbol": "DUNEAnaEventUtils::GetCVNResults"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 2,
       "query": "Where are the hits associated with a cluster retrieved?",
       "expected": [{"file": "dunereco/AnaUtils/DUNEAnaClusterUtils.cxx", "symbol": "DUNEAnaClusterUtils::GetHits"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 3,
       "query": "How does the CC neutrino event selection pick the highest-energy shower?",
       "expected": [{"file": "dunereco/FDSelections/CCNuSelection_module.cc", "symbol": "FDSelection::CCNuSelection::RunHighestEnergyShowerSelection"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 4,
       "query": "How are the track-PID inputs normalized for the CTP (convolutional track PID)?",
       "expected": [{"file": "dunereco/TrackPID/algorithms/CTPHelper.cxx", "symbol": "CTPHelper::NormaliseInputs"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 5,
       "query": "How does the RegCNN evaluator process / produce results for an event?",
       "expected": [{"file": "dunereco/RegCNN/art/RegCNNEvaluator_module.cc", "symbol": "RegCNNEvaluator::produce"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 6,
       "query": "How do you check whether two APA wire channels intersect?",
       "expected": [{"file": "dunereco/HitFinderDUNE/APAGeometryAlg.cxx", "symbol": "APAGeometryAlg::APAChannelsIntersect"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     },
     {
       "id": 7,
       "query": "Where is reconstructed neutrino energy checked / validated?",
       "expected": [{"file": "dunereco/FDSensOpt/CheckRecoEnergy_module.cc", "symbol": "CheckRecoEnergy::analyze"}],
-      "status": "unverified-name-match"
+      "status": "confirmed"
     }
   ]
 }

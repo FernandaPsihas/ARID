@@ -15,12 +15,14 @@ sys.path.append(os.path.dirname(__file__))  # sibling qdrant_index
 from chunk_schema import validate_chunk
 import qdrant_index as qi
 
-EMBED_MODEL = "qwen3-embedding:0.6b"
-# Reads target this name. It's the ALIAS that qdrant_index maintains -- Qdrant
-# resolves it to whichever physical collection is currently live, so re-indexing
-# can swap the data underneath queries without any reader noticing. (Kept named
-# COLLECTION for backwards-compat with anything importing it.)
-COLLECTION  = qi.ALIAS
+EMBED_MODEL = os.environ.get("ARID_EMBED_MODEL", "qwen3-embedding:0.6b")
+# Reads target the shared ALIAS by default -- qdrant_index maintains it, and Qdrant
+# resolves it to whichever physical collection is currently live, so re-indexing can
+# swap the data underneath queries without any reader noticing (see qdrant_index.py).
+# ARID_EMBED_COLLECTION still overrides this, for eval work that needs to query a
+# specific bake-off collection directly instead of the live alias (e.g.
+# eval/bench_retrieval.py's --collection flag).
+COLLECTION  = os.environ.get("ARID_EMBED_COLLECTION", qi.ALIAS)
 QDRANT_URL  = os.environ.get("QDRANT_URL", "http://localhost:6333")  # service name in docker, localhost otherwise
 BATCH_SIZE  = 32
 
