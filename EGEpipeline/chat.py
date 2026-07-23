@@ -2,13 +2,17 @@
 
 Flow: ask for a name, then loop taking questions until the researcher quits
 (Ctrl+D, or typing quit/exit). Each answer streams live via answer.py's
-_generate(), keeping conversational memory across turns (prior Q&A text, not
-the raw code chunks -- those are re-retrieved fresh per question so old
-snippets don't pile up in the context window). After each answer the
-researcher rates it good / needs improvement (with reason codes, or their own
-words) and the whole session -- every question, answer, sources, and rating
--- is saved to feedback/<researcher>/<timestamp>.json after every turn, so a
-crash or Ctrl+C never loses more than the in-flight turn.
+_generate(), keeping conversational memory across turns (prior Q&A text, plus
+the code chunks from the last turn -- see CONTEXT_CAP below. A follow-up like
+"what about the flip handling in that function?" doesn't restate the symbol
+it means, so a from-scratch retrieval on the follow-up alone can miss the
+chunk that's still sitting right there from the previous turn; carrying it
+forward fixes that without needing history-aware query rewriting). After
+each answer the researcher rates it good / needs improvement (with reason
+codes, or their own words) and the whole session -- every question, answer,
+sources, and rating -- is saved to feedback/<researcher>/<timestamp>.json
+after every turn, so a crash or Ctrl+C never loses more than the in-flight
+turn.
 
 Usage:
     python EGEpipeline/chat.py
@@ -34,6 +38,8 @@ CHAT_NUM_CTX = 16384    # bumped over answer.py's 8192: multi-turn history adds 
                         # length, and there's VRAM headroom to spare (see CHANGELOG.md)
 MAX_HISTORY_TURNS = 8   # plain-text Q&A pairs kept in the model's context; the saved
                         # transcript keeps every turn regardless of this cap
+CONTEXT_CAP = TOP_K * 2 # carried-forward + fresh chunks, capped so a long session
+                        # can't pile snippets up unboundedly (7/20 meeting item 5)
 
 REASONS = [
     ("missing_incomplete_info", "Missing or incomplete information"),
@@ -45,6 +51,20 @@ REASONS = [
 ]
 
 QUIT_WORDS = {"quit", "exit", "/quit", "/exit", "/q"}
+
+
+def _merge_chunks(previous: list[dict], fresh: list[dict], cap: int) -> list[dict]:
+    """Previous turn's chunks first (still relevant, and what a vague follow-up
+    like "what about X in that function?" actually needs), then fresh results
+    not already present, truncated to cap so a long session can't grow the
+    context forever."""
+    merged = list(previous)
+    seen = {c["id"] for c in previous}
+    for c in fresh:
+        if c["id"] not in seen:
+            merged.append(c)
+            seen.add(c["id"])
+    return merged[:cap]
 
 
 def slugify(name: str) -> str:
@@ -124,6 +144,7 @@ def main() -> None:
     print(f"Saving this session to {path}\n")
 
     history: list[dict] = []  # plain user/assistant text, no chunks -- see module docstring
+    last_chunks: list[dict] = []  # carried forward each turn, see _merge_chunks
     turn_num = 0
     try:
         while True:
@@ -138,7 +159,8 @@ def main() -> None:
                 break
 
             t0 = time.time()
-            chunks = _retrieve(question, top_k=TOP_K)
+            fresh_chunks = _retrieve(question, top_k=TOP_K)
+            chunks = _merge_chunks(last_chunks, fresh_chunks, CONTEXT_CAP)
             if not chunks:
                 print("No relevant chunks found in the dunereco codebase.\n")
                 continue
@@ -180,6 +202,7 @@ def main() -> None:
 
             history.append({"role": "user", "content": question})
             history.append({"role": "assistant", "content": body})
+            last_chunks = chunks
             print()
     except KeyboardInterrupt:
         print("\n\nInterrupted.")
@@ -193,6 +216,14 @@ def _selfcheck():
     import tempfile
     assert slugify("Dr. Jane O'Brien!") == "dr_jane_o_brien"
     assert slugify("   ") == "researcher"
+
+    prev = [{"id": "a"}, {"id": "b"}]
+    fresh = [{"id": "b"}, {"id": "c"}, {"id": "d"}]
+    merged = _merge_chunks(prev, fresh, cap=3)
+    assert [c["id"] for c in merged] == ["a", "b", "c"], merged  # prev first, deduped, capped
+
+    assert _merge_chunks([], fresh, cap=10) == fresh  # no previous turn -- fresh only
+    assert _merge_chunks(prev, [], cap=10) == prev     # no fresh hits -- keep carrying prev
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         path = session_path("jane", datetime(2026, 7, 13, 15, 30, 0), base_dir=tmp_dir)
