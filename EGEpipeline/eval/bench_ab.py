@@ -118,7 +118,16 @@ def _cites_ungrounded_gold(answer_text: str, gold_ids: list[str], retrieved_ids:
     couldn't have gotten this from what it was given, so it's citing from
     training-data memorization rather than the provided snippets. Checked
     per gold chunk id that's NOT in retrieved_ids (the ones it should have no
-    way to know about)."""
+    way to know about).
+
+    Only trusts specific signals: the file's basename, or a qualified symbol
+    name (contains "::"). A bare unqualified symbol (e.g. FHiCL top-level
+    block names like "services"/"physics"/"source") is too generic -- those
+    recur across nearly every .fcl file in the corpus, so matching on one
+    alone is a false-hallucination-flag waiting to happen (caught this for
+    real: the FHiCL services-config gold query flagged a hallucination purely
+    because the answer legitimately discussed *other*, actually-retrieved
+    .fcl files' "services" blocks)."""
     for cid in gold_ids:
         if cid in retrieved_ids:
             continue  # it legitimately had this one, not a hallucination signal
@@ -127,7 +136,7 @@ def _cites_ungrounded_gold(answer_text: str, gold_ids: list[str], retrieved_ids:
         basename = file.rsplit("/", 1)[-1] if file else ""
         if basename and basename in answer_text:
             return True
-        if symbol and symbol in answer_text:
+        if symbol and "::" in symbol and symbol in answer_text:
             return True
     return False
 
