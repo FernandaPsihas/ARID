@@ -15,7 +15,14 @@ sys.path.append(os.path.dirname(__file__))  # sibling qdrant_index
 from chunk_schema import validate_chunk
 import qdrant_index as qi
 
-EMBED_MODEL = os.environ.get("ARID_EMBED_MODEL", "qwen3-embedding:0.6b")
+# MUST match whatever model actually embedded the live ALIAS collection -- Qdrant
+# rejects a query vector whose dimension doesn't match the collection's (a real
+# outage hit 7/23 flipping the alias to nomic-embed-code while this default was
+# still qwen3-embedding:0.6b: "expected dim: 3584, got 1024" on every unoverridden
+# query). There's no way to derive this automatically from the alias target, so
+# it's on whoever runs embed_store.py's rebuild()/CLI with a different
+# --embed-model to update this default in the same change.
+EMBED_MODEL = os.environ.get("ARID_EMBED_MODEL", "manutic/nomic-embed-code:latest")
 # Reads target the shared ALIAS by default -- qdrant_index maintains it, and Qdrant
 # resolves it to whichever physical collection is currently live, so re-indexing can
 # swap the data underneath queries without any reader noticing (see qdrant_index.py).
