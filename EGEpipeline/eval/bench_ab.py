@@ -1,24 +1,29 @@
-"""bench_ab.py -- A/B robustness test: does retrieval correctly decline (or at
-least go quiet) on a module that's been deliberately removed from the index,
-instead of hallucinating an answer for it? Different question from
-bench_retrieval.py: that one scores how good the real hybrid retrieval is at
-finding the right chunk at all. This one takes BM25-only retrieval (stdlib,
-no Qdrant/Ollama needed for the retrieval half) over two corpora -- the full
+"""bench_ab.py -- A/B robustness test: does the pipeline correctly decline (or
+at least go quiet) on a module that's been deliberately removed from the
+index, instead of hallucinating an answer for it? Different question from
+bench_retrieval.py: that one scores how good retrieval is at finding the
+right chunk at all. This one runs the REAL hybrid search (dense + BM25 + RRF,
+same search_codebase() path production uses) over two corpora -- the full
 chunks.jsonl ("complete") and a copy with a few modules' chunks stripped out
-("partial") -- and checks whether removing a module actually changes
-retrieval/generation behavior the way it should.
+("partial", its own separate Qdrant collection, never the live alias) -- and
+checks whether removing a module actually changes retrieval/generation
+behavior the way it should.
 
 Rebuilt 2026-07-23: the original script (7/12-7/13) was lost with no git
 history, only a stale .pyc survived. Reconstructed from its own past output
 (the ab_report_*.json files it wrote, still on disk) rather than guessed --
 those pin down the exact schema (excluded_modules/elapsed_s/generate/counts/
 rows, and per-row question/note/gold_modules/excluded/complete_hit/
-partial_hit/expect_partial_hit/verdict/complete/partial) and confirmed the
-retrieval side is BM25-only (the scores in the old reports are BM25
-magnitudes, not RRF-fused ones).
+partial_hit/expect_partial_hit/verdict/complete/partial). The original ran
+BM25-only; upgraded 2026-07-24 to the real hybrid path since that's what's
+actually deployed -- testing the weaker BM25-only path was a lower bar than
+what real researchers get. The partial side needs its own Qdrant collection
+(built once via `--rebuild-partial-collection`, embedded under whatever
+ARID_EMBED_MODEL is current), kept fully separate from the live `dunereco`
+alias so this never touches production data.
 
-ONE DELIBERATE CHANGE from the original: the old verdict logic used a
-text-pattern heuristic on the generated answer to guess "did it decline or
+ONE DELIBERATE CHANGE from the original verdict logic: the old heuristic used
+a text-pattern match on the generated answer to guess "did it decline or
 hallucinate", and the 7/13 slide deck says that heuristic had a false-positive
 bug (flagged an honest decline as `hallucination_suspected`). Rather than
 reproduce a heuristic known to have been wrong, this version checks something
@@ -26,13 +31,19 @@ concrete instead: does the partial-index answer cite a file/symbol that
 belongs to an EXCLUDED module gold chunk that was never in its own retrieved
 context? If so, that's not "sounds hallucinate-y", it's "cited something it
 was never given" -- a much harder signal to get a false positive on. See
-`_cites_ungrounded_gold` below.
+`_cites_ungrounded_gold` below (itself patched once already -- see the
+"::"-qualified-symbol-only comment there for a real false positive this
+caught and fixed).
 
 Usage:
-    python bench_ab.py                              # BM25-only, no generation
-    python bench_ab.py --generate                   # also runs answer.py's _generate()
-    python bench_ab.py --limit 3                     # smoke test
-    python bench_ab.py --rebuild-partial             # regenerate chunks_partial.jsonl + manifest first
+    python bench_ab.py                                # hybrid retrieval, no generation
+    python bench_ab.py --generate                     # also runs answer.py's _generate()
+    python bench_ab.py --limit 3                       # smoke test
+    python bench_ab.py --rebuild-partial               # regenerate chunks_partial.jsonl + manifest
+    python bench_ab.py --rebuild-partial-collection    # (re)embed the partial corpus into its own
+                                                        # Qdrant collection -- run this once after any
+                                                        # --rebuild-partial, or after the live embed
+                                                        # model changes, before trusting dense results
 """
 
 from __future__ import annotations
@@ -50,9 +61,11 @@ DEFAULT_GOLD = os.path.join(HERE, "gold.jsonl")
 DEFAULT_COMPLETE = os.path.join(REPO_ROOT, "chunks.jsonl")
 DEFAULT_PARTIAL = os.path.join(REPO_ROOT, "chunks_partial.jsonl")
 DEFAULT_EXCLUDED = ["CVN", "FDSelections", "HitFinderDUNE"]  # matches the manifest already on disk
+DEFAULT_PARTIAL_COLLECTION = "dunereco_partial_nomiccode"  # separate from the live "dunereco" alias
 
 sys.path.insert(0, EGE_ROOT)
-from search_bm25 import BM25, load_chunks  # noqa: E402
+from search_bm25 import load_chunks  # noqa: E402
+from search import search_codebase  # noqa: E402
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -99,6 +112,25 @@ def build_partial_chunks(complete_path: str, partial_path: str, excluded_modules
           f"and {manifest_path}")
 
 
+def rebuild_partial_collection(partial_chunks_path: str, collection: str) -> None:
+    """(Re)embed the partial corpus into its own standalone Qdrant collection
+    -- never the live "dunereco" alias, so this can't affect production
+    queries. Uses whatever ARID_EMBED_MODEL is currently the default (the
+    same model backing the live alias), so complete vs. partial stays a fair
+    apples-to-apples comparison."""
+    import embed_store as es
+    import qdrant_index as qi
+
+    chunks = load_chunks(partial_chunks_path)
+    dim = es._dim()
+    if es._client.collection_exists(collection):
+        es._client.delete_collection(collection)
+    qi.create_collection(es._client, collection, dim)
+    es.index_into(collection, chunks)
+    print(f"embedded {len(chunks)} chunks into standalone collection {collection!r} "
+          f"under {es.EMBED_MODEL}")
+
+
 def _gold_modules(relevant_chunk_ids: list[str], file_by_id: dict[str, str]) -> set[str]:
     mods = set()
     for cid in relevant_chunk_ids:
@@ -142,14 +174,18 @@ def _cites_ungrounded_gold(answer_text: str, gold_ids: list[str], retrieved_ids:
 
 
 def score_row(question: str, gold_ids: list[str], gold_modules: set[str], note: str,
-              excluded_modules: list[str], complete_bm25: BM25, partial_bm25: BM25,
-              file_by_id: dict[str, str], top_k: int, generate: bool) -> dict:
+              excluded_modules: list[str], complete_chunks_path: str, partial_chunks_path: str,
+              partial_collection: str, file_by_id: dict[str, str], top_k: int, generate: bool) -> dict:
     excluded = bool(gold_modules & set(excluded_modules))
 
-    complete_hits = complete_bm25.search(question, top_k=top_k)
-    partial_hits = partial_bm25.search(question, top_k=top_k)
-    complete_ids = {h["chunk_id"] for h in complete_hits}
-    partial_ids = {h["chunk_id"] for h in partial_hits}
+    # complete side: real hybrid search against the live alias (collection=None -> default),
+    # exactly the path a real query takes. partial side: same hybrid search, but pointed at
+    # the standalone partial corpus + its own separate collection.
+    complete_hits = search_codebase(question, top_k=top_k, chunks_path=complete_chunks_path)
+    partial_hits = search_codebase(question, top_k=top_k, chunks_path=partial_chunks_path,
+                                    collection=partial_collection)
+    complete_ids = {h["id"] for h in complete_hits}
+    partial_ids = {h["id"] for h in partial_hits}
     complete_hit = any(cid in complete_ids for cid in gold_ids)
     partial_hit = any(cid in partial_ids for cid in gold_ids)
 
@@ -187,12 +223,12 @@ def score_row(question: str, gold_ids: list[str], gold_modules: set[str], note: 
         "partial_hit": partial_hit,
         "expect_partial_hit": not excluded,
         "verdict": verdict,
-        "complete": {"query": question, "chunks_path": DEFAULT_COMPLETE,
-                     "retrieved": [{"id": h["chunk_id"], "file": h["file"], "symbol": h["symbol"],
+        "complete": {"query": question, "chunks_path": complete_chunks_path,
+                     "retrieved": [{"id": h["id"], "file": h["file"], "symbol": h["symbol"],
                                     "score": h["score"]} for h in complete_hits],
                      "answer": complete_answer},
-        "partial": {"query": question, "chunks_path": DEFAULT_PARTIAL,
-                    "retrieved": [{"id": h["chunk_id"], "file": h["file"], "symbol": h["symbol"],
+        "partial": {"query": question, "chunks_path": partial_chunks_path, "collection": partial_collection,
+                    "retrieved": [{"id": h["id"], "file": h["file"], "symbol": h["symbol"],
                                    "score": h["score"]} for h in partial_hits],
                     "answer": partial_answer},
     }
@@ -200,7 +236,8 @@ def score_row(question: str, gold_ids: list[str], gold_modules: set[str], note: 
 
 
 def write_reports(rows: list[dict], excluded_modules: list[str], elapsed_s: float, generate: bool,
-                   out_dir: str) -> tuple[str, str]:
+                   out_dir: str, complete_chunks_path: str, partial_chunks_path: str,
+                   partial_collection: str) -> tuple[str, str]:
     ts = time.strftime("%Y%m%d_%H%M%S")
     counts: dict[str, int] = {}
     for r in rows:
@@ -215,8 +252,9 @@ def write_reports(rows: list[dict], excluded_modules: list[str], elapsed_s: floa
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# ARID A/B report ({ts})\n\n")
-        f.write(f"Complete: `{DEFAULT_COMPLETE}`  \n")
-        f.write(f"Partial: `{DEFAULT_PARTIAL}` (excluded: {', '.join(excluded_modules)})\n\n")
+        f.write(f"Complete: `{complete_chunks_path}` (live alias)  \n")
+        f.write(f"Partial: `{partial_chunks_path}` + collection `{partial_collection}` "
+                f"(excluded: {', '.join(excluded_modules)})\n\n")
         f.write(f"Verdict counts: {json.dumps(counts)}\n\n")
         for r in rows:
             f.write(f"## {r['question']}\n\n")
@@ -233,11 +271,31 @@ def write_reports(rows: list[dict], excluded_modules: list[str], elapsed_s: floa
     return json_path, md_path
 
 
+def _preflight_dense_check(chunks_path: str, collection: str | None) -> None:
+    """Hard-fail loudly here rather than let search_codebase() catch this and
+    quietly degrade to BM25-only -- a run scored while degraded is a weaker
+    test than the one this is supposed to be, and would look identical in
+    the report unless we check up front (same reasoning as
+    bench_retrieval.py's preflight check)."""
+    from embed_store import search_dense
+    try:
+        search_dense("preflight connectivity check", top_k=1, collection=collection)
+    except Exception as e:
+        sys.exit(
+            f"FATAL: dense retrieval against collection={collection or '(live alias)'} is not "
+            f"reachable -- {type(e).__name__}: {e}\n"
+            "This harness is meant to test the real hybrid path, not a silent BM25-only degrade. "
+            "If the partial collection doesn't exist yet, run --rebuild-partial-collection first."
+        )
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gold", default=DEFAULT_GOLD)
     ap.add_argument("--complete-chunks", default=DEFAULT_COMPLETE)
     ap.add_argument("--partial-chunks", default=DEFAULT_PARTIAL)
+    ap.add_argument("--partial-collection", default=DEFAULT_PARTIAL_COLLECTION,
+                     help="standalone Qdrant collection for the partial corpus -- never the live alias")
     ap.add_argument("--excluded-modules", nargs="+", default=DEFAULT_EXCLUDED)
     ap.add_argument("--top-k", type=int, default=10)
     ap.add_argument("--limit", type=int, default=None, help="only score the first N gold queries")
@@ -247,16 +305,23 @@ def main() -> int:
     ap.add_argument("--rebuild-partial", action="store_true",
                      help="regenerate --partial-chunks (+ its .manifest.json) from --complete-chunks "
                           "before scoring, instead of using whatever's already on disk")
+    ap.add_argument("--rebuild-partial-collection", action="store_true",
+                     help="(re)embed --partial-chunks into --partial-collection before scoring -- "
+                          "needed once after any --rebuild-partial, or after the live embed model changes")
     args = ap.parse_args()
 
     if args.rebuild_partial or not os.path.exists(args.partial_chunks):
         build_partial_chunks(args.complete_chunks, args.partial_chunks, args.excluded_modules)
 
+    if args.rebuild_partial_collection:
+        rebuild_partial_collection(args.partial_chunks, args.partial_collection)
+
+    _preflight_dense_check(args.complete_chunks, None)
+    _preflight_dense_check(args.partial_chunks, args.partial_collection)
+
     t0 = time.time()
     complete_chunks_data = load_chunks(args.complete_chunks)
     file_by_id = {c["id"]: c["file"] for c in complete_chunks_data}
-    complete_bm25 = BM25(complete_chunks_data)
-    partial_bm25 = BM25(load_chunks(args.partial_chunks))
 
     gold_rows = load_jsonl(args.gold)
     if args.limit:
@@ -267,12 +332,14 @@ def main() -> int:
         gold_ids = row["relevant_chunk_ids"]
         mods = _gold_modules(gold_ids, file_by_id)
         r = score_row(row["question"], gold_ids, mods, row.get("note", ""), args.excluded_modules,
-                      complete_bm25, partial_bm25, file_by_id, args.top_k, args.generate)
+                      args.complete_chunks, args.partial_chunks, args.partial_collection,
+                      file_by_id, args.top_k, args.generate)
         rows.append(r)
         print(f"scored: {row['question'][:70]!r}  verdict={r['verdict']}")
 
     elapsed_s = time.time() - t0
-    write_reports(rows, args.excluded_modules, elapsed_s, args.generate, HERE)
+    write_reports(rows, args.excluded_modules, elapsed_s, args.generate, HERE,
+                  args.complete_chunks, args.partial_chunks, args.partial_collection)
     return 0
 
 

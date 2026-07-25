@@ -161,9 +161,12 @@ def rebuild(chunks: list[dict], *, force: bool = False) -> str | None:
         force=force,
     )
 
-def search_dense(query: str, top_k: int = 20) -> list[dict]:
+def search_dense(query: str, top_k: int = 20, collection: str | None = None) -> list[dict]:
+    """collection overrides the module default (the live shared alias) --
+    e.g. for bench_ab.py's partial-index side, which needs its own separate
+    collection rather than the production alias."""
     hits = _client.query_points(
-        collection_name=COLLECTION,
+        collection_name=collection or COLLECTION,
         query=_embed(query),
         limit=top_k,
     ).points
