@@ -65,5 +65,94 @@ def test_extract():
     print("KAN-10..13 ✓")
 
 
+EXCL_FILES = {
+    # lowercase .h must dispatch to the cpp parser (Tier 1 is 1636 .h / 0 .H)
+    "inc/Hit.h": "class Hit {\npublic:\n    int View() const { return v; }\n};\n",
+    "src/keep.cc": "int keep() {\n    return 1;\n}\n",
+    "cfg/gen_real.fcl": "physics: {\n    producer: keepme\n}\n",
+    # one file per EXCLUDE_PATTERNS rule, all otherwise perfectly parseable
+    "test/unit.cc": "int dropped() {\n    return 0;\n}\n",
+    "larreco/Genfit/Fit.cc": "int vendored() {\n    return 0;\n}\n",
+    "fcl/protodune/fcldirs/calib/g.fcl": "Values: [\n    0.19, 0.19\n]\n",
+    "cfg/prodgenie_dune10kt.fcl": "physics: {\n    producer: perm\n}\n",
+}
+
+
+def test_exclusions_and_header_dispatch():
+    with tempfile.TemporaryDirectory() as root:
+        for rel, body in EXCL_FILES.items():
+            p = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+        _git(root, "init", "-q")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x")
+
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            result = extract.extract(root, [])
+            chunks = [json.loads(l) for l in open(extract.OUT, encoding="utf-8")]
+        finally:
+            os.chdir(cwd)
+
+    indexed = {c["file"] for c in chunks}
+
+    # the regression this guards: .h reaching parse_cpp at all
+    assert "inc/Hit.h" in indexed, sorted(indexed)
+    assert result["stats"]["cpp"][0] == 2, result["stats"]  # Hit.h + keep.cc
+
+    # every rule fired exactly once, and nothing it matched got indexed
+    assert result["excluded"] == {
+        "test-dirs": 1,
+        "vendored-genfit": 1,
+        "calib-constant-tables": 1,
+        "prod-job-permutations": 1,
+    }, result["excluded"]
+    for rel in ("test/unit.cc", "larreco/Genfit/Fit.cc",
+                "fcl/protodune/fcldirs/calib/g.fcl", "cfg/prodgenie_dune10kt.fcl"):
+        assert rel not in indexed, rel
+
+    # non-prod fcl next to an excluded one survives (rule is prefix-scoped)
+    assert "cfg/gen_real.fcl" in indexed, sorted(indexed)
+
+    print("exclusions + .h dispatch ✓")
+
+
+# one-line class carrying its own inline ctor -> parse_cpp emits two chunks with
+# the same symbol at the same line, so make_chunk_id returns the same id for both
+COLLIDE = {"inc/Hw.h": "class Cryostat : public Element{ public: Cryostat(ID id) : Element(id) {} };\n"}
+
+
+def test_chunk_ids_are_unique():
+    with tempfile.TemporaryDirectory() as root:
+        for rel, body in COLLIDE.items():
+            p = os.path.join(root, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                f.write(body)
+        _git(root, "init", "-q")
+        _git(root, "add", "-A")
+        _git(root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "x")
+
+        cwd = os.getcwd()
+        os.chdir(root)
+        try:
+            result = extract.extract(root, [])
+            chunks = [json.loads(l) for l in open(extract.OUT, encoding="utf-8")]
+        finally:
+            os.chdir(cwd)
+
+    ids = [c["id"] for c in chunks]
+    assert len(ids) == len(set(ids)), sorted(ids)
+    if result["collisions"]:
+        assert any("#" in i for i in ids), sorted(ids)
+
+    print("unique chunk ids ✓")
+
+
 if __name__ == "__main__":
     test_extract()
+    test_exclusions_and_header_dispatch()
+    test_chunk_ids_are_unique()

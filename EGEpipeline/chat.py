@@ -1,4 +1,7 @@
-"""Interactive multi-turn CLI for researchers to query dunereco and rate answers.
+"""Interactive multi-turn CLI for researchers to query the index and rate answers.
+
+The corpus is the Tier 1 DUNE + LArSoft set (24 repos), not just dunereco -- see
+INDEX_EXCLUSIONS.md.
 
 Flow: ask for a name, then loop taking questions until the researcher quits
 (Ctrl+D, or typing quit/exit). Each answer streams live via answer.py's
@@ -140,7 +143,7 @@ def main() -> None:
         "ended_at": None,
         "turns": [],
     }
-    print(f"\nHi {researcher}! Ask anything about the dunereco codebase.")
+    print(f"\nHi {researcher}! Ask anything about the DUNE + LArSoft codebase.")
     print(f"Saving this session to {path}\n")
 
     history: list[dict] = []  # plain user/assistant text, no chunks -- see module docstring
@@ -162,7 +165,7 @@ def main() -> None:
             fresh_chunks = _retrieve(question, top_k=TOP_K)
             chunks = _merge_chunks(last_chunks, fresh_chunks, CONTEXT_CAP)
             if not chunks:
-                print("No relevant chunks found in the dunereco codebase.\n")
+                print("No relevant chunks found in the indexed codebase.\n")
                 continue
 
             sources = [{"file": c["file"], "start_line": c["start_line"],

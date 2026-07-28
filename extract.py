@@ -14,6 +14,7 @@ These are WARNed per-file, greppable by symbol, and listed in the summary.
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -28,13 +29,25 @@ OUT = "chunks.jsonl"
 FALLBACK_SYMBOL = "__WHOLE_FILE__"
 
 # ext -> (parser, language). C++ covers the spread of LArSoft conventions.
-_CPP = {".C", ".cc", ".cxx", ".cpp", ".H", ".hh", ".hxx", ".hpp"}
+# NB ".h" and ".H" are distinct keys on a case-sensitive filesystem: Tier 1 has
+# 1636 ".h" and zero ".H", so omitting ".h" silently dropped every header.
+_CPP = {".C", ".cc", ".cxx", ".cpp", ".c++", ".H", ".h", ".hh", ".hxx", ".hpp", ".tcc"}
 DISPATCH = {
     **{e: (parse_cpp, "cpp") for e in _CPP},
     ".py": (parse_python, "python"),
     ".jsonnet": (parse_jsonnet, "jsonnet"),
     ".fcl": (parse_fcl, "fcl"),
 }
+
+# Paths that parse fine but hurt retrieval — see INDEX_EXCLUSIONS.md for the
+# reasoning and counts behind each. Matched against the repo-relative path.
+EXCLUDE_PATTERNS = {
+    "test-dirs": r"(^|/)test/",
+    "vendored-genfit": r"larreco/Genfit/",
+    "calib-constant-tables": r"fcl/protodune/fcldirs/(calib|pedestal|rundata)/",
+    "prod-job-permutations": r"/prod[^/]*\.fcl$",
+}
+_EXCLUDE_RE = {k: re.compile(v) for k, v in EXCLUDE_PATTERNS.items()}
 
 
 def _git_files(root: str, subdirs: list[str]) -> list[str]:
@@ -46,6 +59,14 @@ def _git_files(root: str, subdirs: list[str]) -> list[str]:
     cmd = ["git", "-C", root, "ls-files", "-z", "--", *subdirs]
     out = subprocess.run(cmd, capture_output=True, text=True, check=True).stdout
     return [p for p in out.split("\0") if p and os.path.exists(os.path.join(root, p))]
+
+
+def _excluded_by(rel: str) -> str | None:
+    """Name of the first EXCLUDE_PATTERNS rule matching `rel`, else None."""
+    for name, rx in _EXCLUDE_RE.items():
+        if rx.search(rel):
+            return name
+    return None
 
 
 def _fallback_chunk(rel: str, abspath: str, language: str) -> dict | None:
@@ -77,12 +98,24 @@ def extract(root: str, subdirs: list[str]) -> dict:
     # per-language tally: [files, chunks, fallback_files]
     stats = {lang: [0, 0, 0] for _, lang in DISPATCH.values()}
     fallback_files = []
+    excluded = {name: 0 for name in EXCLUDE_PATTERNS}
+    # make_chunk_id is file+symbol+start_line, which is NOT unique: a one-line
+    # class carrying its own inline constructor ("class Cryostat : public Element
+    # { public: Cryostat(ID id) ... };") yields two chunks with the same symbol at
+    # the same line. Downstream that id becomes a uuid5 Qdrant point id, so a
+    # collision silently overwrites the earlier chunk instead of erroring.
+    seen_ids: set[str] = set()
+    collisions = 0
 
     with open(OUT, "w", encoding="utf-8") as out:
         for rel in _git_files(root, subdirs):
             ext = os.path.splitext(rel)[1]
             entry = DISPATCH.get(ext)
             if entry is None:
+                continue
+            rule = _excluded_by(rel)
+            if rule is not None:
+                excluded[rule] += 1
                 continue
             parser, language = entry
             stats[language][0] += 1
@@ -107,10 +140,18 @@ def extract(root: str, subdirs: list[str]) -> dict:
                     fallback_files.append(rel)
 
             for c in chunks:
+                if c["id"] in seen_ids:
+                    collisions += 1
+                    base, n = c["id"], 2
+                    while f"{base}#{n}" in seen_ids:
+                        n += 1
+                    c["id"] = f"{base}#{n}"
+                seen_ids.add(c["id"])
                 out.write(json.dumps(c) + "\n")
             stats[language][1] += len(chunks)
 
-    return {"stats": stats, "fallback_files": fallback_files}
+    return {"stats": stats, "fallback_files": fallback_files, "excluded": excluded,
+            "collisions": collisions}
 
 
 def _print_summary(result: dict) -> None:
@@ -118,6 +159,18 @@ def _print_summary(result: dict) -> None:
     print(f"{'lang':<9}{'files':>8}{'chunks':>9}{'fallback':>10}", file=sys.stderr)
     for lang, (files, chunks, fb) in sorted(result["stats"].items()):
         print(f"{lang:<9}{files:>8}{chunks:>9}{fb:>10}", file=sys.stderr)
+    # Print every rule, including zero matches: a rule that stops matching after
+    # an upstream reorg is a silent coverage change, so make it visible.
+    exc = result["excluded"]
+    print(f"\nexcluded by path (see INDEX_EXCLUSIONS.md): {sum(exc.values())} files", file=sys.stderr)
+    for name, n in exc.items():
+        print(f"  {name:<26}{n:>7}", file=sys.stderr)
+
+    if result["collisions"]:
+        print(f"\n{result['collisions']} duplicate chunk id(s) disambiguated with a "
+              "'#n' suffix (same symbol+line, e.g. a one-line class + its inline ctor)",
+              file=sys.stderr)
+
     fbs = result["fallback_files"]
     if fbs:
         print(f"\n{len(fbs)} whole-file fallbacks (grep {FALLBACK_SYMBOL} {OUT}):", file=sys.stderr)

@@ -78,32 +78,48 @@ def index_into(collection: str, chunks: list[dict]):
     failed = []
     done = 0
 
-    def _embed_group(idxs: list[int]) -> list:
+    # The vector is a pure function of the (truncated) embed input, so identical
+    # text embeds once and fans out to every chunk that shares it. 21% of the Tier 1
+    # corpus is duplicate text -- C++ forward declarations ("class ParameterSet"
+    # appears 85 times across 12 repos) and jsonnet import bindings
+    # ("wc = import 'wirecell.jsonnet'", 160 times) that the chunkers emit as
+    # standalone chunks. Keyed on the SAME truncation _embed_batch applies, so two
+    # texts differing only past MAX_EMBED_CHARS correctly share one vector.
+    by_text: dict[str, list[int]] = {}
+    for i, c in enumerate(chunks):
+        by_text.setdefault(c["text"][:MAX_EMBED_CHARS], []).append(i)
+    texts = list(by_text)
+    if len(texts) < total:
+        print(f"  {total} chunks -> {len(texts)} distinct embed inputs "
+              f"({total - len(texts)} duplicates skipped)")
+
+    def _embed_group(group: list[str]) -> list:
         # one batched request for the whole group; if the batch call itself
         # fails, fall back to per-chunk requests so one bad chunk (e.g. a
         # pathological encoding) doesn't sink its whole batch.
         try:
-            return _embed_batch([chunks[i]["text"] for i in idxs])
+            return _embed_batch(group)
         except Exception:
             results = []
-            for i in idxs:
+            for t in group:
                 try:
-                    results.append(_embed(chunks[i]["text"]))
+                    results.append(_embed(t))
                 except Exception as e:
                     results.append(e)
             return results
 
-    groups = [list(range(i, min(i + BATCH_SIZE, total))) for i in range(0, total, BATCH_SIZE)]
+    groups = [texts[i:i + BATCH_SIZE] for i in range(0, len(texts), BATCH_SIZE)]
 
     # each group is one batched embed call; WORKERS groups run concurrently so
     # the GPU stays fed between requests instead of idling on network/JSON overhead.
     with concurrent.futures.ThreadPoolExecutor(max_workers=WORKERS) as pool:
         futures = {pool.submit(_embed_group, g): g for g in groups}
         for future in concurrent.futures.as_completed(futures):
-            idxs = futures[future]
+            group = futures[future]
             results = future.result()
             points = []
-            for i, r in zip(idxs, results):
+            # one embed result fans out to every chunk that shares that text
+            for i, r in ((i, r) for text, r in zip(group, results) for i in by_text[text]):
                 chunk = chunks[i]
                 done += 1
                 if isinstance(r, Exception):
