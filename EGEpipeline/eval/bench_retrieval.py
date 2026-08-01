@@ -1,6 +1,9 @@
 """bench_retrieval.py -- scores the real hybrid retrieval (search.py's
 search_codebase, dense+BM25 RRF fusion) against gold.jsonl using recall@k,
-precision@k, nDCG@k, and MRR.
+precision@k, nDCG@k, and MRR -- plus two pathology-specific metrics:
+constructor-surfacing rate (boilerplate ctors outranking the real-logic
+method) and multiplicity coverage (queries whose gold answer is more than one
+chunk, all of which must surface).
 
 Different question from bench_ab.py/AB_TESTING.md: that one checks whether the
 pipeline hallucinates when context is missing (BM25-only, complete vs partial
@@ -34,7 +37,13 @@ EGE_ROOT = os.path.dirname(HERE)
 DEFAULT_GOLD = os.path.join(HERE, "gold.jsonl")
 
 sys.path.insert(0, EGE_ROOT)
-from metrics import score_query  # noqa: E402
+from metrics import (  # noqa: E402
+    constructor_surfacing_rate,
+    has_non_constructor_gold,
+    multiplicity_coverage,
+    multiplicity_coverage_summary,
+    score_query,
+)
 
 
 def load_jsonl(path: str) -> list[dict]:
@@ -95,14 +104,30 @@ def main() -> int:
         results = search_codebase(question, top_k=pool)
         ranked_ids = [r["id"] for r in results]
         scores = score_query(ranked_ids, gold_ids, args.ks)
+        is_multiplicity = len(gold_ids) > 1
+        ctor_applicable = has_non_constructor_gold(gold_ids)
+        multiplicity_scores = (
+            {k: multiplicity_coverage(ranked_ids, gold_ids, k) for k in args.ks}
+            if is_multiplicity else None
+        )
         per_query.append({
             "question": question,
             "gold_ids": sorted(gold_ids),
             "ranked_ids": ranked_ids,
             "scores": scores,
+            "is_multiplicity": is_multiplicity,
+            "ctor_pathology_applicable": ctor_applicable,
+            "multiplicity_scores": multiplicity_scores,
         })
+        note = ""
+        if is_multiplicity:
+            note += f"  multiplicity_cov@{args.ks[-1]}={multiplicity_scores[args.ks[-1]]:.2f}"
+        if ctor_applicable:
+            # top-1 specifically -- computed directly rather than via scores[...][1]
+            # since 1 isn't guaranteed to be in args.ks (e.g. --ks 3 5 10).
+            note += f"  ctor_surfacing@1={constructor_surfacing_rate(ranked_ids, gold_ids, 1):.2f}"
         print(f"scored: {question[:70]!r}  mrr={scores['mrr']:.2f}  "
-              f"recall@{args.ks[-1]}={scores['recall'][args.ks[-1]]:.2f}")
+              f"recall@{args.ks[-1]}={scores['recall'][args.ks[-1]]:.2f}{note}")
 
     n = len(per_query) or 1
     agg = {
@@ -110,6 +135,30 @@ def main() -> int:
         "precision": {k: sum(q["scores"]["precision"][k] for q in per_query) / n for k in args.ks},
         "ndcg": {k: sum(q["scores"]["ndcg"][k] for q in per_query) / n for k in args.ks},
         "mrr": sum(q["scores"]["mrr"] for q in per_query) / n,
+        "constructor_surfacing": {k: sum(q["scores"]["constructor_surfacing"][k] for q in per_query) / n
+                                   for k in args.ks},
+    }
+
+    # Constructor-surfacing rate, restricted to queries where a constructor
+    # showing up would unambiguously be wrong (see has_non_constructor_gold) --
+    # the unrestricted number above is diluted by queries (like InfillChannels'
+    # ctor) whose correct answer genuinely is a constructor.
+    ctor_rows = [q for q in per_query if q["ctor_pathology_applicable"]]
+    n_ctor = len(ctor_rows) or 1
+    agg["constructor_surfacing_applicable"] = {
+        "n_queries": len(ctor_rows),
+        "rate": {k: sum(q["scores"]["constructor_surfacing"][k] for q in ctor_rows) / n_ctor for k in args.ks},
+    }
+
+    # Multiplicity coverage: subset of queries with >1 gold id, i.e. sibling
+    # implementations that must ALL surface (see gold.jsonl notes on rows 17-20).
+    multi_rows = [q for q in per_query if q["is_multiplicity"]]
+    n_multi = len(multi_rows) or 1
+    agg["multiplicity"] = {
+        "n_queries": len(multi_rows),
+        "mean_coverage": {k: sum(q["multiplicity_scores"][k] for q in multi_rows) / n_multi for k in args.ks},
+        "breakdown": {k: multiplicity_coverage_summary([q["multiplicity_scores"][k] for q in multi_rows])
+                      for k in args.ks},
     }
 
     ts = time.strftime("%Y%m%d_%H%M%S")
@@ -131,10 +180,30 @@ def main() -> int:
         f.write("## Aggregate\n\n")
         f.write("| metric | " + " | ".join(f"@{k}" for k in args.ks) + " |\n")
         f.write("|---" * (len(args.ks) + 1) + "|\n")
-        for name in ("recall", "precision", "ndcg"):
+        for name in ("recall", "precision", "ndcg", "constructor_surfacing"):
             f.write(f"| {name} | " + " | ".join(f"{agg[name][k]:.2f}" for k in args.ks) + " |\n")
         f.write(f"\n**MRR**: {agg['mrr']:.3f}\n\n")
-        f.write("## Per-query\n\n")
+
+        f.write("## Constructor-vs-method surfacing\n\n")
+        f.write(f"Restricted to the {agg['constructor_surfacing_applicable']['n_queries']} "
+                f"queries (of {n}) where gold contains a real method, so a constructor "
+                "showing up would unambiguously be crowding out the right answer:\n\n")
+        f.write("| @k | " + " | ".join(str(k) for k in args.ks) + " |\n")
+        f.write("|---" * (len(args.ks) + 1) + "|\n")
+        f.write("| rate | " + " | ".join(
+            f"{agg['constructor_surfacing_applicable']['rate'][k]:.2f}" for k in args.ks) + " |\n\n")
+
+        f.write("## Multiplicity coverage\n\n")
+        f.write(f"{agg['multiplicity']['n_queries']} of {n} queries have more than one gold id "
+                "(sibling implementations that must all surface).\n\n")
+        f.write("| @k | mean coverage | full | partial | zero |\n")
+        f.write("|---|---|---|---|---|\n")
+        for k in args.ks:
+            b = agg["multiplicity"]["breakdown"][k]
+            f.write(f"| {k} | {agg['multiplicity']['mean_coverage'][k]:.2f} | "
+                    f"{b['full']} | {b['partial']} | {b['zero']} |\n")
+
+        f.write("\n## Per-query\n\n")
         for q in per_query:
             f.write(f"### {q['question']}\n\n")
             f.write(f"- gold: {q['gold_ids']}\n")
@@ -142,7 +211,16 @@ def main() -> int:
             f.write(f"- mrr={q['scores']['mrr']:.2f}, "
                      f"recall@{args.ks[-1]}={q['scores']['recall'][args.ks[-1]]:.2f}, "
                      f"precision@{args.ks[-1]}={q['scores']['precision'][args.ks[-1]]:.2f}, "
-                     f"ndcg@{args.ks[-1]}={q['scores']['ndcg'][args.ks[-1]]:.2f}\n\n")
+                     f"ndcg@{args.ks[-1]}={q['scores']['ndcg'][args.ks[-1]]:.2f}\n")
+            if q["ctor_pathology_applicable"]:
+                f.write(f"- constructor_surfacing@{args.ks[-1]}="
+                        f"{q['scores']['constructor_surfacing'][args.ks[-1]]:.2f} "
+                        "(gold contains a real method -- a constructor here is wrong)\n")
+            if q["is_multiplicity"]:
+                f.write(f"- multiplicity_coverage@{args.ks[-1]}="
+                        f"{q['multiplicity_scores'][args.ks[-1]]:.2f} "
+                        f"({len(q['gold_ids'])} distinct gold ids)\n")
+            f.write("\n")
 
     print(f"\nwrote {md_path}\nwrote {json_path}")
     print("aggregate:", json.dumps(agg, indent=2))

@@ -50,9 +50,27 @@ MAX_LEN = int(os.environ.get("ARID_RERANK_MAXLEN", "512"))
 BATCH = int(os.environ.get("ARID_RERANK_BATCH", "32"))
 # Instruction handed to the causal reranker -- framed for THIS domain (code Q&A), which is
 # the whole point of using a code-capable reranker over a general web-QA one.
+#
+# 8/1 fix: on "Where is reconstructed neutrino energy checked / validated?" the reranker
+# buried the correct CheckRecoEnergy::analyze and instead put CVNValidation::analyze (an
+# unrelated CVN-classification method) at rank 1 -- purely because "Validation" in the
+# class name lexically echoes "validated" in the query, even though CVNValidation's body
+# has nothing to do with neutrino energy. The team estimates this lexical-over-semantic
+# trap affects ~10% of gold queries. The instruction below now says explicitly: score the
+# document body's actual computation, and explicitly disregard name/lemma overlap with the
+# query -- a name match with unrelated body logic must be scored "no". This is a prompt-only
+# change (same yes/no P(yes) scoring path); it hasn't been run against the real model (no
+# GPU/model access here), so treat it as a hypothesis to validate on the real bake-off, not
+# a proven fix.
 CAUSAL_INSTRUCT = ("Given a question about a software codebase, judge whether the code "
-                   "snippet contains the actual logic that answers it (not merely a class "
-                   "declaration, constructor, or mention of the relevant name).")
+                   "snippet's body actually performs the computation the question asks "
+                   "about. Base the judgment ONLY on what the code body computes or does, "
+                   "never on whether words in the question textually or lexically resemble "
+                   "the class, method, or file name -- e.g. a class named '...Validation' "
+                   "or '...Check' is NOT a match for a question about being 'validated' or "
+                   "'checked' unless its body actually performs that specific computation. "
+                   "A class declaration, constructor, or name-only match whose body does "
+                   "something unrelated must be judged 'no'.")
 _CAUSAL_PREFIX = ("<|im_start|>system\nJudge whether the Document meets the requirements based "
                   "on the Query and the Instruct provided. Note that the answer can only be "
                   "\"yes\" or \"no\".<|im_end|>\n<|im_start|>user\n")

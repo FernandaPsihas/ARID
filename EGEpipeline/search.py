@@ -2,12 +2,15 @@
 
 Optional cross-encoder rerank stage: if ARID_RERANK_URL points at a running
 rerank_server.py, the RRF-fused top-RERANK_POOL candidates get rescored by a
-cross-encoder (reads query+chunk together, unlike the bi-encoder embedder) and
-re-ordered before the final top_k cut. Unset the env var and it's a pure no-op
--- behaviour is byte-identical to the old RRF-only path, so existing callers
-are unaffected. If the URL is set but the service is unreachable, a query
-degrades to RRF order with a warning rather than failing (same philosophy as
-the dense-search fallback below).
+cross-encoder (reads query+chunk together, unlike the bi-encoder embedder),
+then re-ordered before the final top_k cut by a weighted blend of that
+cross-encoder score and the original RRF score (ARID_RERANK_BLEND, see
+_blend_scores in _rerank) -- not a straight cross-encoder sort, so one bad
+rerank call can't fully bury a candidate the retrieval side ranked well. Unset
+the env var and it's a pure no-op -- behaviour is byte-identical to the old
+RRF-only path, so existing callers are unaffected. If the URL is set but the
+service is unreachable, a query degrades to RRF order with a warning rather
+than failing (same philosophy as the dense-search fallback below).
 """
 
 import json
@@ -25,6 +28,12 @@ SCHEMA_FIELDS = ("id", "file", "start_line", "end_line", "symbol", "language", "
 RERANK_URL = os.environ.get("ARID_RERANK_URL")          # e.g. http://localhost:8095; unset -> rerank off
 RERANK_POOL = int(os.environ.get("ARID_RERANK_POOL", "40"))  # RRF candidates fed to the reranker
 RERANK_SNIPPET = 2000  # chars of each chunk sent to the reranker (its own input is truncated too)
+# 8/1: weight on the cross-encoder score in the final blend, in [0, 1]. 1.0 reproduces the
+# old behaviour (reranker fully replaces RRF order); 0.0 ignores the reranker entirely. See
+# _blend_scores() -- this is here so one bad reranker call (e.g. a lexical surface-match false
+# positive like CVNValidation vs. "validated") can't fully bury a candidate that scored well
+# on retrieval; the RRF side still has a say in the final order instead of being discarded.
+RERANK_BLEND = float(os.environ.get("ARID_RERANK_BLEND", "0.65"))
 
 _bm25_cache: dict[str, BM25 | None] = {}
 def _get_bm25(chunks_path: str = CHUNKS_PATH) -> BM25 | None:
@@ -68,12 +77,54 @@ def _rrf(*ranked_lists, k=RRF_K):
     return scores, meta
 
 
+def _normalize(xs: list[float]) -> list[float]:
+    """Min-max squash a list of scores to [0, 1]. A tied/degenerate list (all
+    equal, incl. a single element) maps to a constant 0.5 -- neutral, so a flat
+    signal doesn't get to arbitrarily out-vote the other one in _blend_scores."""
+    lo, hi = min(xs), max(xs)
+    if hi - lo < 1e-12:
+        return [0.5] * len(xs)
+    return [(x - lo) / (hi - lo) for x in xs]
+
+
+def _blend_scores(rrf_scores: list[float], rerank_scores: list[float],
+                  weight: float = RERANK_BLEND) -> list[float]:
+    """Combine RRF scores and cross-encoder scores into one final ranking score
+    per candidate, so the cross-encoder REORDERS the pool rather than fully
+    REPLACING the retrieval-side ordering. Each list is min-max normalized to
+    [0, 1] within this candidate pool before blending, because the two scores
+    live on unrelated, incomparable scales: RRF scores are sums of reciprocal
+    ranks (tiny positive floats, no fixed range), while reranker scores are
+    either P(yes) in [0, 1] (causal, the default) or an unbounded classification
+    logit (seqcls) -- blending raw values would let whichever side happens to
+    have larger magnitudes silently dominate regardless of `weight`.
+
+    `weight` is the trust placed in the cross-encoder: 1.0 reproduces the old
+    "reranker fully replaces RRF order" behaviour, 0.0 ignores the reranker
+    entirely. Pure function of two equal-length float lists -- no model, no I/O
+    -- so it's covered by an offline unit test with fake scores standing in for
+    a real reranker call.
+    """
+    r_n = _normalize(rrf_scores)
+    x_n = _normalize(rerank_scores)
+    return [weight * x + (1.0 - weight) * r for x, r in zip(x_n, r_n)]
+
+
 def _rerank(query: str, candidates: list[dict]) -> list[dict]:
-    """Reorder candidates best-first by the cross-encoder rerank service, if one
-    is configured and reachable. Stdlib-only (urllib) so the query venv needs
-    no torch/transformers -- the model lives in rerank_server.py inside the GPU
-    container. Any failure (no URL, service down, bad response) returns the input
-    unchanged, so a query never breaks on rerank being unavailable."""
+    """Reorder candidates by a blend of the cross-encoder rerank score and the
+    original RRF score, if a rerank service is configured and reachable.
+    Stdlib-only (urllib) so the query venv needs no torch/transformers -- the
+    model lives in rerank_server.py inside the GPU container. Any failure (no
+    URL, service down, bad response) returns the input unchanged, so a query
+    never breaks on rerank being unavailable.
+
+    Blended rather than a straight cross-encoder sort (see _blend_scores):
+    a single bad cross-encoder call -- e.g. a lexical surface-match false
+    positive like scoring CVNValidation::analyze above CheckRecoEnergy::analyze
+    for a "validated" query, purely because "Validation" echoes "validated" --
+    can shove a well-retrieved candidate out of the running entirely under a
+    pure cross-encoder sort. Blending means the RRF side still has a vote in
+    the final order instead of being fully discarded."""
     if not RERANK_URL or not candidates:
         return candidates
     try:
@@ -85,7 +136,9 @@ def _rerank(query: str, candidates: list[dict]) -> list[dict]:
             scores = json.loads(resp.read())["scores"]
         if len(scores) != len(candidates):  # defensive: mismatched response, don't trust it
             raise ValueError(f"got {len(scores)} scores for {len(candidates)} candidates")
-        order = sorted(range(len(candidates)), key=lambda i: scores[i], reverse=True)
+        rrf_scores = [c["score"] for c in candidates]  # RRF order-derived score, set in search_codebase
+        blended = _blend_scores(rrf_scores, scores)
+        order = sorted(range(len(candidates)), key=lambda i: blended[i], reverse=True)
         return [candidates[i] for i in order]
     except Exception as e:  # rerank is an enhancement, never a hard dependency
         print(f"warning: rerank unavailable ({e}); using RRF order", file=sys.stderr)
@@ -126,10 +179,11 @@ def search_codebase(query: str, top_k: int = 10, pool: int = 10,
         return []
     scores, meta = _rrf(dense, sparse)
 
-    # Candidate dicts in RRF order. Rerank (if configured) reorders them by the
-    # cross-encoder BEFORE dedup, so it sees every sibling/overload and can pick
-    # the one that actually answers the query -- then dedup keeps the best per
-    # (file, symbol) preserving that order, then top_k (7/20 item 2 + 7/24 rerank).
+    # Candidate dicts in RRF order. Rerank (if configured) reorders them by a
+    # blend of the cross-encoder score and this RRF score BEFORE dedup, so it
+    # sees every sibling/overload and can pick the one that actually answers
+    # the query -- then dedup keeps the best per (file, symbol) preserving that
+    # order, then top_k (7/20 item 2 + 7/24 rerank, 8/1 blend).
     ordered_ids = sorted(scores, key=scores.get, reverse=True)
     if RERANK_URL:
         ordered_ids = ordered_ids[:RERANK_POOL]
