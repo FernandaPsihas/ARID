@@ -22,21 +22,25 @@ from metrics import (
 
 # Real chunk ids lifted from EGEpipeline/eval/gold.jsonl, so the id-format
 # assumptions (file_Namespace::Class::Symbol_line) are the real convention,
-# not a made-up shape.
-CTOR_ID = ("dunereco/InfillChannels/art/InfillChannels_module.cc_"
+# not a made-up shape. Doubled "dunereco/dunereco/..." prefix (8/1): Tier-1
+# extraction root sits one level above each repo clone, so dunereco's own
+# internal LArSoft package dir (also named "dunereco") shows up twice -- see
+# the 8/1 gold.jsonl id-fix commit message for the full explanation.
+CTOR_ID = ("dunereco/dunereco/InfillChannels/art/InfillChannels_module.cc_"
            "Infill::InfillChannels::InfillChannels_83")
-METHOD_ID = ("dunereco/FDSelections/CCNuSelection_module.cc_"
+METHOD_ID = ("dunereco/dunereco/FDSelections/CCNuSelection_module.cc_"
              "FDSelection::CCNuSelection::RunHighestEnergyShowerSelection_1682")
-TWO_PART_METHOD_ID = "dunereco/AnaUtils/DUNEAnaEventUtils.cxx_DUNEAnaEventUtils::HasNeutrino_153"
-FCL_ID = "dunereco/CVN/adcutils/sp_fd_adcdump_job_example.fcl_services_12"
+TWO_PART_METHOD_ID = ("dunereco/dunereco/AnaUtils/DUNEAnaEventUtils.cxx_"
+                       "DUNEAnaEventUtils::HasNeutrino_153")
+FCL_ID = "dunereco/dunereco/CVN/adcutils/sp_fd_adcdump_job_example.fcl_services_12"
 # synthetic 2-part (no namespace level) constructor, to check that path too
 TWO_PART_CTOR_ID = "some/path/Foo.cc_Foo::Foo_10"
 
 # Real multiplicity gold pair from gold.jsonl row 17 (two SelectTrack() tool
 # implementations of the same interface -- both must surface).
-TRACK_A = ("dunereco/FDSelections/tools/LongestRecoVertexTrackSelector_tool.cc_"
+TRACK_A = ("dunereco/dunereco/FDSelections/tools/LongestRecoVertexTrackSelector_tool.cc_"
            "FDSelectionTools::LongestRecoVertexTrackSelector::SelectTrack_15")
-TRACK_B = ("dunereco/FDSelections/tools/HighestPandizzleScoreRecoVertexTrackSelector_tool.cc_"
+TRACK_B = ("dunereco/dunereco/FDSelections/tools/HighestPandizzleScoreRecoVertexTrackSelector_tool.cc_"
            "FDSelectionTools::HighestPandizzleScoreRecoVertexTrackSelector::SelectTrack_14")
 
 
