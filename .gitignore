@@ -15,6 +15,7 @@ chunks_quarkylab.jsonl
 EGEpipeline/eval/ab_report_*
 EGEpipeline/eval/retrieval_report_*
 EGEpipeline/eval/temp_sweep_*
+EGEpipeline/eval/gen_report_*
 
 # researcher chat sessions from EGEpipeline/chat.py — local usage data, not source
 feedback/
