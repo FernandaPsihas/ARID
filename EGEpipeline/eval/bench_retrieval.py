@@ -14,8 +14,17 @@ scored while degraded would look like a real hybrid-search number and isn't
 one. If you WANT a BM25-only baseline on purpose, that's a separate,
 explicit thing to add later, not a silent fallback here.
 
+--dunereco-only scores the pre-Tier-1 baseline, reusing chat.py's corpus
+constants so the two entry points can't drift apart. It switches BOTH halves
+of hybrid retrieval (Qdrant collection AND BM25 chunks file) because they
+describe one corpus; switching only the collection would fuse the old dense
+index with Tier 1's chunks.jsonl and score neither corpus. --collection on
+its own is still fine and still correct for the embed-model bake-off, where
+the chunk text is identical and only the vectors differ.
+
 Usage:
-    python bench_retrieval.py                    # full run against gold.jsonl
+    python bench_retrieval.py                    # full run against gold.jsonl (Tier 1)
+    python bench_retrieval.py --dunereco-only     # pre-Tier-1 baseline (7,004 chunks)
     python bench_retrieval.py --ks 1 3 5 10       # (default) which k values to report
     python bench_retrieval.py --limit 3           # smoke test on the first 3 queries
     python bench_retrieval.py --gold path/to.jsonl --pool 20
@@ -69,7 +78,21 @@ def main() -> int:
                           "must match whatever model built --collection's vectors")
     ap.add_argument("--collection", default=None,
                      help="override ARID_EMBED_COLLECTION (which Qdrant collection to search)")
+    ap.add_argument("--dunereco-only", action="store_true",
+                     help="score the pre-Tier-1 dunereco snapshot (7,004 chunks) instead of the "
+                          "live Tier 1 index -- switches both the Qdrant collection and the BM25 "
+                          "corpus together, same pair chat.py --dunereco-only uses")
     args = ap.parse_args()
+
+    chunks_override = None
+    if args.dunereco_only:
+        if args.collection:
+            sys.exit("FATAL: --dunereco-only already sets the collection; drop --collection.")
+        # Reuse chat.py's constants rather than restating the collection id and .bak
+        # path here -- one definition of "the dunereco-only corpus", not two.
+        from chat import DUNERECO_ONLY_CHUNKS, DUNERECO_ONLY_COLLECTION
+        args.collection = DUNERECO_ONLY_COLLECTION
+        chunks_override = DUNERECO_ONLY_CHUNKS
 
     pool = args.pool or max(args.ks)
 
@@ -82,7 +105,11 @@ def main() -> int:
         os.environ["ARID_EMBED_COLLECTION"] = args.collection
 
     preflight_dense_check()
-    from search import search_codebase  # after preflight, and after sys.path is set up
+    from search import search_codebase, CHUNKS_PATH  # after preflight, and after sys.path is set up
+
+    chunks_path = chunks_override or CHUNKS_PATH
+    if not os.path.exists(chunks_path):
+        sys.exit(f"FATAL: BM25 corpus not found: {chunks_path}")
 
     gold_rows = load_jsonl(args.gold)
     if args.limit:
@@ -92,7 +119,7 @@ def main() -> int:
     for row in gold_rows:
         question = row["question"]
         gold_ids = set(row["relevant_chunk_ids"])
-        results = search_codebase(question, top_k=pool)
+        results = search_codebase(question, top_k=pool, chunks_path=chunks_path)
         ranked_ids = [r["id"] for r in results]
         scores = score_query(ranked_ids, gold_ids, args.ks)
         per_query.append({
@@ -122,11 +149,13 @@ def main() -> int:
     with open(json_path, "w", encoding="utf-8") as f:
         json.dump({"gold": args.gold, "ks": args.ks, "pool": pool,
                     "embed_model": embed_model, "collection": collection,
+                    "chunks": os.path.abspath(chunks_path),
                     "aggregate": agg, "per_query": per_query}, f, indent=2)
 
     with open(md_path, "w", encoding="utf-8") as f:
         f.write(f"# ARID retrieval benchmark ({ts})\n\n")
         f.write(f"Embed model: `{embed_model}`  |  Qdrant collection: `{collection}`\n\n")
+        f.write(f"BM25 corpus: `{os.path.abspath(chunks_path)}`\n\n")
         f.write(f"Gold set: `{args.gold}` ({n} queries)  |  pool (search top_k): {pool}\n\n")
         f.write("## Aggregate\n\n")
         f.write("| metric | " + " | ".join(f"@{k}" for k in args.ks) + " |\n")
