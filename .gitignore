@@ -3,7 +3,10 @@ __pycache__/
 
 # extraction inputs/outputs — not part of ARID history
 dunereco/
+repos/
 chunks.jsonl
+chunks.jsonl.tmp
+chunks.jsonl.bak-*
 chunks_partial.jsonl
 chunks_partial.manifest.json
 chunks_quarkylab.jsonl

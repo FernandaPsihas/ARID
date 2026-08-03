@@ -18,7 +18,8 @@ after every turn, so a crash or Ctrl+C never loses more than the in-flight
 turn.
 
 Usage:
-    python EGEpipeline/chat.py
+    python EGEpipeline/chat.py                  # Tier 1 DUNE + LArSoft (default, 43,142 chunks)
+    python EGEpipeline/chat.py --dunereco-only   # pre-Tier-1 dunereco-only snapshot (7,004 chunks)
 """
 
 import json
@@ -43,6 +44,14 @@ MAX_HISTORY_TURNS = 8   # plain-text Q&A pairs kept in the model's context; the 
                         # transcript keeps every turn regardless of this cap
 CONTEXT_CAP = TOP_K * 2 # carried-forward + fresh chunks, capped so a long session
                         # can't pile snippets up unboundedly (7/20 meeting item 5)
+
+# --dunereco-only pins retrieval to the pre-Tier-1 snapshot (dunereco alone, 7,004
+# chunks) instead of the live Tier 1 alias (24 repos, 43,142 chunks) -- kept around
+# for A/B comparison against the wider index. Collection id from `curl localhost:6333/aliases`
+# before the Tier 1 swap; chunks file is the .bak dropped at swap time (see CHANGELOG.md).
+DUNERECO_ONLY_COLLECTION = "dunereco__4194ef58bb8e__1784852027_8a544e45"
+DUNERECO_ONLY_CHUNKS = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "chunks.jsonl.bak-dunereco-7004")
 
 REASONS = [
     ("missing_incomplete_info", "Missing or incomplete information"),
@@ -130,15 +139,20 @@ def prompt_rating() -> tuple[str, list[str], str]:
     return "needs_improvement", reasons, notes
 
 
-def main() -> None:
+def main(dunereco_only: bool = False) -> None:
+    corpus_kwargs = ({"chunks_path": DUNERECO_ONLY_CHUNKS, "collection": DUNERECO_ONLY_COLLECTION}
+                      if dunereco_only else {})
+    corpus_label = "dunereco-only (7,004 chunks)" if dunereco_only else "Tier 1 DUNE + LArSoft (43,142 chunks)"
+
     print("=== ARID Research Assistant ===")
-    print(f"Model: {GEN_MODEL}  |  type 'quit' or Ctrl+D to end the session\n")
+    print(f"Model: {GEN_MODEL}  |  Corpus: {corpus_label}  |  type 'quit' or Ctrl+D to end the session\n")
     researcher = ask_name()
     started_at = datetime.now()
     path = session_path(slugify(researcher), started_at)
     session = {
         "researcher": researcher,
         "model": GEN_MODEL,
+        "corpus": corpus_label,
         "started_at": started_at.isoformat(timespec="seconds"),
         "ended_at": None,
         "turns": [],
@@ -162,7 +176,7 @@ def main() -> None:
                 break
 
             t0 = time.time()
-            fresh_chunks = _retrieve(question, top_k=TOP_K)
+            fresh_chunks = _retrieve(question, top_k=TOP_K, **corpus_kwargs)
             chunks = _merge_chunks(last_chunks, fresh_chunks, CONTEXT_CAP)
             if not chunks:
                 print("No relevant chunks found in the indexed codebase.\n")
@@ -217,6 +231,7 @@ def main() -> None:
 
 def _selfcheck():
     import tempfile
+    assert os.path.exists(DUNERECO_ONLY_CHUNKS), "--dunereco-only backup chunks file missing"
     assert slugify("Dr. Jane O'Brien!") == "dr_jane_o_brien"
     assert slugify("   ") == "researcher"
 
@@ -243,4 +258,4 @@ if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--test":
         _selfcheck()
         sys.exit(0)
-    main()
+    main(dunereco_only="--dunereco-only" in sys.argv)

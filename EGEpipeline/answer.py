@@ -62,12 +62,17 @@ def _format_context(chunks: list[dict]) -> str:
     return "\n\n".join(blocks)
 
 
-def _retrieve(query: str, top_k: int) -> list[dict]:
+def _retrieve(query: str, top_k: int, chunks_path: str | None = None,
+              collection: str | None = None) -> list[dict]:
     """Hybrid retrieval. search_codebase degrades on its own -- BM25-only if the
     dense side (Qdrant/Ollama) is down, dense-only if there's no local chunks.jsonl,
-    and [] with a warning only if both halves are unavailable."""
-    from search import search_codebase  # lazy: pulls qdrant/ollama/bm25 only when run
-    return search_codebase(query, top_k=top_k)
+    and [] with a warning only if both halves are unavailable.
+
+    chunks_path/collection let a caller point at a different corpus snapshot
+    (e.g. chat.py's --dunereco-only toggle) instead of the live Tier 1 index."""
+    from search import search_codebase, CHUNKS_PATH  # lazy: pulls qdrant/ollama/bm25 only when run
+    return search_codebase(query, top_k=top_k, chunks_path=chunks_path or CHUNKS_PATH,
+                            collection=collection)
 
 
 def _generate(query: str, chunks: list[dict], stream: bool = False,
