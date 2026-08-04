@@ -1,0 +1,5 @@
+# Slack bot only (arid_slack.py). Not in requirements-query.txt on purpose --
+# researchers running chat.py/answer.py don't need it; only the one operator
+# running the bot does. Install into the query venv: .venv/bin/pip install -r this.
+# slack-bolt pulls slack-sdk; socket mode needs no extra web framework.
+slack-bolt
