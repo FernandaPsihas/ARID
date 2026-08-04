@@ -370,7 +370,6 @@ ARID/
 ├── services.sh             Detect-or-host the shared services (reuse if running, else up + provision)
 ├── docker-compose.shared.yml  the ONE shared stack: qdrant + ollama + provision (run once per host)
 ├── docker-compose.gpu.yml  optional override: adds NVIDIA GPU passthrough to ollama
-├── arid-mcp.cmd            Windows shim: sshd forced command for the MCP stdio channel
 ├── Dockerfile
 └── dunereco/               Clone of the target repo (gitignored, not baked into the image)
 ```
