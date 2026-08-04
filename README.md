@@ -365,8 +365,6 @@ ARID/
 │   └── arid_mcp.py         MCP server exposing search_arid/ask_arid over SSH stdio
 ├── feedback/                gitignored: chat.py session logs, one JSON per researcher/session
 ├── tests/                  pytest suite for the parsers + chunk schema
-├── eval/
-│   └── gold_queries.json   Gold query set for retrieval eval (KAN-24)
 ├── docker/
 │   └── bootstrap.py        Provisioner: clone → extract → safe embed+index, idempotent
 ├── services.sh             Detect-or-host the shared services (reuse if running, else up + provision)
@@ -381,6 +379,6 @@ ARID/
 
 ## Evaluation
 
-`eval/gold_queries.json` contains a starter set of 7 natural-language queries with expected chunk targets for measuring retrieval quality (Recall@k, MRR). All queries are currently `unverified-name-match` status — targets were derived by pattern-matching symbol names and need confirmation against actual function bodies (KAN-24).
+`EGEpipeline/eval/gold.jsonl` contains the gold query set for measuring retrieval quality (Recall@k, MRR), used by `EGEpipeline/eval/bench_retrieval.py`.
 
 ---

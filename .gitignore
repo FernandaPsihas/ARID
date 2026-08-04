@@ -31,3 +31,4 @@ CHANGELOG.md
 
 # one-time local migration override, not shipped
 docker-compose.migrate.yml
+.idea/
