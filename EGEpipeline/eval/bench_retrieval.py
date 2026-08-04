@@ -43,12 +43,7 @@ EGE_ROOT = os.path.dirname(HERE)
 DEFAULT_GOLD = os.path.join(HERE, "gold.jsonl")
 
 sys.path.insert(0, EGE_ROOT)
-from metrics import score_query  # noqa: E402
-
-
-def load_jsonl(path: str) -> list[dict]:
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
+from metrics import load_jsonl, score_query  # noqa: E402
 
 
 def preflight_dense_check() -> None:

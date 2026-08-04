@@ -64,13 +64,9 @@ DEFAULT_EXCLUDED = ["CVN", "FDSelections", "HitFinderDUNE"]  # matches the manif
 DEFAULT_PARTIAL_COLLECTION = "dunereco_partial_nomiccode"  # separate from the live "dunereco" alias
 
 sys.path.insert(0, EGE_ROOT)
+from metrics import load_jsonl  # noqa: E402
 from search_bm25 import load_chunks  # noqa: E402
 from search import search_codebase  # noqa: E402
-
-
-def load_jsonl(path: str) -> list[dict]:
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
 
 
 def build_partial_chunks(complete_path: str, partial_path: str, excluded_modules: list[str]) -> None:

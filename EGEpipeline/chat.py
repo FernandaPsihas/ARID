@@ -35,7 +35,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from env_setup import ensure_env
 ensure_env()
 
-from answer import GEN_MODEL, TOP_K, GenerationUnavailable, _generate, _retrieve
+from answer import GEN_MODEL, TOP_K, GenerationUnavailable, _generate, _retrieve, format_sources
 
 FEEDBACK_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "feedback")
 CHAT_NUM_CTX = 16384    # bumped over answer.py's 8192: multi-turn history adds a bit of
@@ -184,8 +184,7 @@ def main(dunereco_only: bool = False) -> None:
 
             sources = [{"file": c["file"], "start_line": c["start_line"],
                         "end_line": c["end_line"], "symbol": c["symbol"]} for c in chunks]
-            src_text = "\n".join(
-                f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
+            src_text = format_sources(chunks)
 
             print()
             try:

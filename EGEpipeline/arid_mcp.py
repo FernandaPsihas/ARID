@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.dirname(__file__))  # import sibling search.py / answ
 
 from mcp.server.fastmcp import FastMCP
 
-from answer import GenerationUnavailable, _generate
+from answer import GenerationUnavailable, _generate, format_sources
 from search import search_codebase
 
 mcp = FastMCP("arid")
@@ -43,7 +43,7 @@ def ask_arid(query: str, top_k: int = 6) -> str:
     chunks = search_codebase(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found in the dunereco codebase."
-    src = "\n".join(f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}" for c in chunks)
+    src = format_sources(chunks)
     try:
         body = _generate(query, chunks)
     except GenerationUnavailable as e:

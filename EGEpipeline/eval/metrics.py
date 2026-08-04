@@ -2,6 +2,10 @@
 against a gold relevant-chunk-id set. Pure functions, no I/O, no dependency on
 the rest of ARID -- reusable from bench_retrieval.py or a notebook alike.
 
+The one exception to "no I/O" is load_jsonl below -- a trivial, dependency-free
+file reader duplicated identically across bench_ab.py/bench_retrieval.py/temp_sweep.py
+until 2026-08-04, when it was hoisted here as the shared eval-script loader.
+
 All four assume binary relevance (a chunk either is or isn't in the gold set)
 since that's what gold.jsonl currently encodes; nDCG still adds value over
 plain recall because it rewards ranking the correct hit(s) higher, not just
@@ -10,7 +14,14 @@ including them somewhere in the top k.
 
 from __future__ import annotations
 
+import json
 import math
+
+
+def load_jsonl(path: str) -> list[dict]:
+    """Read a JSONL file into a list of dicts, skipping blank lines."""
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
 
 
 def recall_at_k(ranked_ids: list[str], gold_ids: set[str], k: int) -> float:

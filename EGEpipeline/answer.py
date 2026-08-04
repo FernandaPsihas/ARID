@@ -131,6 +131,15 @@ def _generate(query: str, chunks: list[dict], stream: bool = False,
         ) from e
 
 
+def format_sources(chunks: list[dict]) -> str:
+    """One "file  Lstart-end  symbol" line per chunk, newline-joined -- the
+    shared citation-list format every entry point (CLI/MCP/Slack) prints."""
+    return "\n".join(
+        f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}"
+        for c in chunks
+    )
+
+
 def answer(query: str, top_k: int = TOP_K, stream: bool = False) -> str:
     """Retrieve, ground the local model, and return the answer plus its sources.
 
@@ -139,10 +148,7 @@ def answer(query: str, top_k: int = TOP_K, stream: bool = False) -> str:
     chunks = _retrieve(query, top_k=top_k)
     if not chunks:
         return "No relevant chunks found."
-    sources = "\n".join(
-        f"  {c['file']}  L{c['start_line']}-{c['end_line']}  {c['symbol']}"
-        for c in chunks
-    )
+    sources = format_sources(chunks)
     try:
         body = _generate(query, chunks, stream=stream)
     except GenerationUnavailable as e:

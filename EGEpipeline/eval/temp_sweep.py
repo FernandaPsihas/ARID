@@ -32,12 +32,8 @@ DEFAULT_GOLD = os.path.join(HERE, "gold.jsonl")
 DEFAULT_CHUNKS = os.path.join(os.path.dirname(EGE_ROOT), "chunks.jsonl")
 
 sys.path.insert(0, EGE_ROOT)
+from metrics import load_jsonl  # noqa: E402
 from answer import _retrieve, _generate, TOP_K  # noqa: E402
-
-
-def load_jsonl(path: str) -> list[dict]:
-    with open(path, encoding="utf-8") as f:
-        return [json.loads(line) for line in f if line.strip()]
 
 
 def build_id_to_file(chunks_path: str) -> dict:
