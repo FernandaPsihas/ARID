@@ -285,8 +285,11 @@ dunereco corpus.
 
 | | GPU | CPU |
 |---|---|---|
-| generation, one query | ~21s | ~74s |
+| generation, median tok/s (n=3, matched questions) | 93.0 tok/s | 13.1 tok/s |
+| generation, typical answer time (~330 tok) | ~4s | ~57s |
 | full re-embed, 7004 chunks | ~3m45s | ~40min |
+
+Generation figures are from `EGEpipeline/eval/bench_gen.py`, generation-phase only (excludes retrieval/prefill), same 3 gold questions on both arms, measured 2026-08-05 (`gen_report_gpu_20260805_010217.json` / `gen_report_cpu_20260805_010611.json`). This replaces an earlier, less-documented ~21s/~74s single-query estimate that could not be reconciled against this benchmark.
 
 **Embedding is GPU-token-bound, and already at its ceiling.** Cost tracks the
 total number of characters sent, not how they're packaged. Things that were
